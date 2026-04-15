@@ -7,7 +7,7 @@ import { Button } from "../components/ui/button";
 import { User, Lock, Mail } from "lucide-react";
 
 export default function Signup() {
-  const [fullName, setFullName] = useState("");
+  const [name, setName] = useState("");
   const [userName, setUserName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -45,7 +45,7 @@ export default function Signup() {
       return;
     }
 
-    const payload = { fullName, userName, email, password };
+    const payload = { name, userName, email, password };
     const success = await register(payload);
     if (success) {
       navigate("/login");
@@ -62,8 +62,8 @@ export default function Signup() {
         <Input
           type="text"
           placeholder="Họ và Tên"
-          value={fullName}
-          onChange={(e) => setFullName(e.target.value)}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
           icon={<User className="h-5 w-5" />}
           required
         />

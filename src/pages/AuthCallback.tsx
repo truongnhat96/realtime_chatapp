@@ -16,11 +16,12 @@ export default function AuthCallback() {
     const hashParams = new URLSearchParams(hash.substring(1));
     const token = hashParams.get("access_token");
     const id = hashParams.get("Id") || hashParams.get("id");
+    const sessionId = hashParams.get("sessionId") || '';
 
     const processOAuth = async () => {
-      console.log(token, id);
+      console.log(token, id, sessionId);
       if (token && id) {
-        const success = await handleOAuthCallback(token, id);
+        const success = await handleOAuthCallback(token, id, sessionId);
         console.log(success);
         if (success) {
           navigate("/", { replace: true });

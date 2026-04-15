@@ -15,10 +15,10 @@ export function useAuth() {
   const login = async (userName: string, password: string) => {
     try {
       setLoading(true);
-      const res = await axiosInstance.post<any, ApiResponse>('/Authenticate/sign-in', { userName, password });
+      const res = await axiosInstance.post<any, ApiResponse>('/authenticate/sign-in', { userName, password });
 
       if (res.isSuccess && res.data && res.data.accessToken && res.data.info) {
-        setAuth(res.data.info, res.data.accessToken);
+        setAuth(res.data.info, res.data.accessToken, res.data.sessionId);
         addToast({ type: 'success', message: 'Bạn đã đăng nhập thành công vào hệ thống' });
         return true;
       }
@@ -36,7 +36,7 @@ export function useAuth() {
     try {
       setLoading(true);
       // Ensure backend expectations match payload
-      await axiosInstance.post('/Authenticate/sign-up', payload);
+      await axiosInstance.post('/authenticate/sign-up', payload);
       addToast({ type: 'success', message: 'Đăng ký tài khoản thành công! Vui lòng đăng nhập.' });
       return true;
     } catch (err: any) {
@@ -49,9 +49,11 @@ export function useAuth() {
   };
 
   const signOut = async () => {
+    const userId = useAuthStore.getState().user?.id;
+    const sessionId = useAuthStore.getState().sessionId;
     try {
       setLoading(true);
-      await axiosInstance.post('/Authenticate/sign-out');
+      await axiosInstance.post('/authenticate/sign-out', { userId, sessionId });
     } catch (error) {
       console.warn('Sign out failed on server', error);
     } finally {
@@ -60,7 +62,7 @@ export function useAuth() {
     }
   };
 
-  const handleOAuthCallback = async (token: string, userId: string) => {
+  const handleOAuthCallback = async (token: string, userId: string, sessionId: string) => {
     try {
       setLoading(true);
       // Construct a temporary axios config to fetch profile data with the URL token
@@ -72,7 +74,7 @@ export function useAuth() {
 
       if (res.isSuccess && res.data) {
         // Set user and token globally
-        setAuth(res.data, token);
+        setAuth(res.data, token, sessionId);
         addToast({ type: 'success', message: 'Bạn đã đăng nhập thành công qua Google' });
         return true;
       }

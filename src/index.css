@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-primary-cyan: #8ED8ED;
   --color-gray-input: #F5F5F5;
@@ -11,8 +13,10 @@
 
 @layer base {
   body {
-    @apply antialiased text-gray-900 bg-gray-50;
-    margin: 0;
+    @apply antialiased text-gray-900 bg-[#F3F4F6] transition-colors duration-200;
+  }
+  .dark body {
+    @apply text-gray-100 bg-[#1E1E1E];
   }
 }
 
