@@ -4,12 +4,16 @@ import { useAuthStore } from '../../stores/authStore';
 import { chatApi } from '../../lib/api';
 import { Loader2 } from 'lucide-react';
 
+const EMPTY_TYPING_USERS: Array<{ userId: string; userName?: string; updatedAt: number }> = [];
+const STALE_TYPING_MAX_AGE_MS = 5000;
+
 interface Props {
   conversationId: string;
 }
 
 export default function MessageList({ conversationId }: Props) {
   const { messages, setMessages, prependMessages, conversations } = useChatStore();
+  const typingByConversationId = useChatStore((state) => state.typingByConversationId);
   const currentUserId = useAuthStore(state => state.user?.id);
   const opponentUser = conversations.find(c => c.conversationId === conversationId)?.user;
 
@@ -20,6 +24,11 @@ export default function MessageList({ conversationId }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const currentMessages = messages[conversationId] || [];
+  const typingUsers = typingByConversationId[conversationId] || EMPTY_TYPING_USERS;
+  const isOpponentTyping = typingUsers.some((entry) => {
+    if (entry.userId === currentUserId) return false;
+    return Date.now() - entry.updatedAt <= STALE_TYPING_MAX_AGE_MS;
+  });
 
   // Fetch initial messages when conversation changes
   useEffect(() => {
@@ -38,6 +47,12 @@ export default function MessageList({ conversationId }: Props) {
       scrollToBottom();
     }
   }, [currentMessages.length]);
+
+  useEffect(() => {
+    if (isOpponentTyping) {
+      scrollToBottom();
+    }
+  }, [isOpponentTyping]);
 
   const fetchMessages = async (page: number, isInitial = false) => {
     if (!hasMore && !isInitial) return;
@@ -171,6 +186,29 @@ export default function MessageList({ conversationId }: Props) {
           </div>
         );
       })}
+
+      {isOpponentTyping && opponentUser && (
+        <div className="flex justify-start max-w-full mt-2">
+          <div className="w-10 mr-2.5 flex-shrink-0 flex items-end">
+            <img
+              src={opponentUser.urlAvatar || '/default-avatar.png'}
+              alt={opponentUser.name}
+              className="w-10 h-10 rounded-full object-cover bg-gray-200"
+            />
+          </div>
+
+          <div className="max-w-[72%] flex flex-col items-start relative">
+            <div className="py-2 px-3.5 bg-white dark:bg-[#2C2C2C] rounded-2xl rounded-bl-none shadow-sm">
+              <span className="inline-flex items-center gap-1" aria-label={`${opponentUser.name} đang nhập`}>
+                <span className="w-2 h-2 rounded-full bg-gray-400/90 dark:bg-gray-300/80 animate-bounce [animation-delay:-0.32s]" />
+                <span className="w-2 h-2 rounded-full bg-gray-400/90 dark:bg-gray-300/80 animate-bounce [animation-delay:-0.16s]" />
+                <span className="w-2 h-2 rounded-full bg-gray-400/90 dark:bg-gray-300/80 animate-bounce" />
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div ref={messagesEndRef} />
     </div>
   );

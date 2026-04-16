@@ -1,11 +1,18 @@
 import { create } from 'zustand';
 import type { ConversationItem, MessageItem } from '../types/chat';
 
+interface TypingUserState {
+  userId: string;
+  userName?: string;
+  updatedAt: number;
+}
+
 interface ChatState {
   conversations: ConversationItem[];
   activeConversationId: string | null;
   messages: Record<string, MessageItem[]>;
   onlineUsers: Record<string, boolean>;
+  typingByConversationId: Record<string, TypingUserState[]>;
 
   setConversations: (conversations: ConversationItem[]) => void;
   appendConversations: (conversations: ConversationItem[]) => void;
@@ -16,6 +23,9 @@ interface ChatState {
   prependMessages: (conversationId: string, messages: MessageItem[]) => void; // for load more
   updateConversationLastMessage: (conversationId: string, messageText: string, time: string) => void;
   setUserOnlineStatus: (userId: string, isOnline: boolean) => void;
+  setUserTyping: (conversationId: string, userId: string, isTyping: boolean, userName?: string) => void;
+  clearTypingConversation: (conversationId: string) => void;
+  clearStaleTyping: (conversationId: string, maxAgeMs?: number) => void;
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -23,6 +33,7 @@ export const useChatStore = create<ChatState>((set) => ({
   activeConversationId: null,
   messages: {},
   onlineUsers: {},
+  typingByConversationId: {},
 
   setConversations: (conversations) => set({ conversations }),
 
@@ -112,4 +123,82 @@ export const useChatStore = create<ChatState>((set) => ({
       [userId]: isOnline
     }
   })),
+
+  setUserTyping: (conversationId, userId, isTyping, userName) => set((state) => {
+    if (!conversationId || !userId) {
+      return state;
+    }
+
+    const existing = state.typingByConversationId[conversationId] || [];
+
+    if (!isTyping) {
+      const nextUsers = existing.filter((entry) => entry.userId !== userId);
+
+      if (nextUsers.length === existing.length) {
+        return state;
+      }
+
+      const nextTypingByConversationId = { ...state.typingByConversationId };
+      if (nextUsers.length === 0) {
+        delete nextTypingByConversationId[conversationId];
+      } else {
+        nextTypingByConversationId[conversationId] = nextUsers;
+      }
+
+      return { typingByConversationId: nextTypingByConversationId };
+    }
+
+    const now = Date.now();
+    const existingUser = existing.find((entry) => entry.userId === userId);
+    const nextUsers = existingUser
+      ? existing.map((entry) => {
+          if (entry.userId !== userId) return entry;
+          return {
+            ...entry,
+            userName: userName || entry.userName,
+            updatedAt: now
+          };
+        })
+      : [...existing, { userId, userName, updatedAt: now }];
+
+    return {
+      typingByConversationId: {
+        ...state.typingByConversationId,
+        [conversationId]: nextUsers
+      }
+    };
+  }),
+
+  clearTypingConversation: (conversationId) => set((state) => {
+    if (!state.typingByConversationId[conversationId]) {
+      return state;
+    }
+
+    const nextTypingByConversationId = { ...state.typingByConversationId };
+    delete nextTypingByConversationId[conversationId];
+    return { typingByConversationId: nextTypingByConversationId };
+  }),
+
+  clearStaleTyping: (conversationId, maxAgeMs = 5000) => set((state) => {
+    const existing = state.typingByConversationId[conversationId];
+    if (!existing || existing.length === 0) {
+      return state;
+    }
+
+    const now = Date.now();
+    const nextUsers = existing.filter((entry) => now - entry.updatedAt <= maxAgeMs);
+
+    if (nextUsers.length === existing.length) {
+      return state;
+    }
+
+    const nextTypingByConversationId = { ...state.typingByConversationId };
+    if (nextUsers.length === 0) {
+      delete nextTypingByConversationId[conversationId];
+    } else {
+      nextTypingByConversationId[conversationId] = nextUsers;
+    }
+
+    return { typingByConversationId: nextTypingByConversationId };
+  }),
 }));

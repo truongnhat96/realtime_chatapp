@@ -2,24 +2,39 @@ import { useState } from 'react';
 import { Send, Smile, Paperclip } from 'lucide-react';
 
 interface Props {
-  onSendMessage: (text: string) => void;
+  onSendMessage: (text: string) => void | Promise<void>;
+  onTypingInputChange?: (value: string) => void;
+  onStopTyping?: () => void;
   disabled?: boolean;
 }
 
-export default function ChatInput({ onSendMessage, disabled }: Props) {
+export default function ChatInput({ onSendMessage, onTypingInputChange, onStopTyping, disabled }: Props) {
   const [message, setMessage] = useState('');
+  const [isSending, setIsSending] = useState(false);
 
-  const handleSend = (e?: React.FormEvent) => {
+  const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (message.trim() && !disabled) {
-      onSendMessage(message.trim());
+
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage || disabled || isSending) {
+      return;
+    }
+
+    setIsSending(true);
+    try {
+      await Promise.resolve(onSendMessage(trimmedMessage));
       setMessage('');
+      onTypingInputChange?.('');
+    } catch (error) {
+      console.error('Failed to send message: ', error);
+    } finally {
+      setIsSending(false);
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
-      handleSend();
+      void handleSend();
     }
   };
 
@@ -36,15 +51,22 @@ export default function ChatInput({ onSendMessage, disabled }: Props) {
         <input
           type="text"
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) => {
+            const nextValue = e.target.value;
+            setMessage(nextValue);
+            onTypingInputChange?.(nextValue);
+          }}
           onKeyDown={handleKeyDown}
+          onBlur={onStopTyping}
           placeholder={disabled ? "Đang kết nối..." : "Nhập tin nhắn..."}
           className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-[15px] text-gray-900 dark:text-gray-100 placeholder-gray-500"
         />
         
         <button
-          onClick={handleSend}
-          disabled={!message.trim() || disabled}
+          onClick={() => {
+            void handleSend();
+          }}
+          disabled={!message.trim() || disabled || isSending}
           className={`p-2.5 rounded-full transition-all flex items-center justify-center
             ${message.trim() 
               ? 'bg-[#8ED8ED] text-white hover:bg-[#7bc8dd]' 

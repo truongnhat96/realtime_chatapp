@@ -1,16 +1,21 @@
 import { useMemo } from 'react';
 import { useChatStore } from '../../stores/chatStore';
+import { useAuthStore } from '../../stores/authStore';
+import { useTypingIndicator } from '../../hooks/useTypingIndicator';
 import { ArrowLeft, MoreVertical, Phone, Video } from 'lucide-react';
 import MessageList from './MessageList';
 import ChatInput from './ChatInput';
 
 interface Props {
   sendMessage: (conversationId: string, content: string, toUserId: string) => Promise<void>;
+  sendTyping: (conversationId: string, toUserId: string) => Promise<void>;
+  stopTypingSignal: (conversationId: string, toUserId: string) => Promise<void>;
   isConnected: boolean;
 }
 
-export default function ChatArea({ sendMessage, isConnected }: Props) {
+export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, isConnected }: Props) {
   const { conversations, activeConversationId, setActiveConversationId, onlineUsers } = useChatStore();
+  const currentUserId = useAuthStore((state) => state.user?.id);
 
   const conversation = useMemo(() => {
     return conversations.find(c => c.conversationId === activeConversationId);
@@ -21,9 +26,22 @@ export default function ChatArea({ sendMessage, isConnected }: Props) {
   const user = conversation.user;
   const isOnline = onlineUsers[user.id] ?? user.isOnline;
 
-  const handleSendMessage = (text: string) => {
+  const {
+    onTypingInputChange,
+    stopTyping
+  } = useTypingIndicator({
+    conversationId: activeConversationId,
+    toUserId: user.id,
+    currentUserId,
+    isConnected,
+    sendTyping,
+    stopTypingSignal
+  });
+
+  const handleSendMessage = async (text: string) => {
     // Send via signalR
-    sendMessage(activeConversationId, text, user.id);
+    await sendMessage(activeConversationId, text, user.id);
+    stopTyping();
   };
 
   return (
@@ -69,7 +87,12 @@ export default function ChatArea({ sendMessage, isConnected }: Props) {
       <MessageList conversationId={activeConversationId} />
 
       {/* Input */}
-      <ChatInput onSendMessage={handleSendMessage} disabled={!isConnected} />
+      <ChatInput
+        onSendMessage={handleSendMessage}
+        onTypingInputChange={onTypingInputChange}
+        onStopTyping={stopTyping}
+        disabled={!isConnected}
+      />
     </div>
   );
 }

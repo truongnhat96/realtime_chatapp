@@ -11,7 +11,7 @@ export default function Chat() {
   const { activeConversationId } = useChatStore();
 
   // Khởi tạo SignalR
-  const { isConnected, sendMessage } = useChatHub();
+  const { isConnected, sendMessage, sendTyping, stopTyping } = useChatHub();
 
   if (!hasHydrated || !user) return null;
 
@@ -25,7 +25,12 @@ export default function Chat() {
       {/* Main Area */}
       <div className={`flex-1 flex flex-col ${!activeConversationId ? 'hidden md:flex' : 'flex'}`}>
         {activeConversationId ? (
-          <ChatArea sendMessage={sendMessage} isConnected={isConnected} />
+          <ChatArea
+            sendMessage={sendMessage}
+            sendTyping={sendTyping}
+            stopTypingSignal={stopTyping}
+            isConnected={isConnected}
+          />
         ) : (
           <ChatLanding />
         )}

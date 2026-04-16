@@ -23,6 +23,8 @@ export const useChatHub = () => {
       previousConnection.off('ReceiveMessage');
       previousConnection.off('UserOnline');
       previousConnection.off('UserOffline');
+      previousConnection.off('UserTyping');
+      previousConnection.off('UserStopTyping');
       if (previousConnection.state !== 'Disconnected') {
         previousConnection.stop().catch(() => undefined);
       }
@@ -70,6 +72,9 @@ export const useChatHub = () => {
         sendTime: msgSendTime,
         fromUserId: msgFromUserId
       });
+      if (msgFromUserId) {
+        useChatStore.getState().setUserTyping(conversationId, msgFromUserId, false);
+      }
 
       const currentConversations = useChatStore.getState().conversations;
       const conversationExists = currentConversations.some(c => c.conversationId === conversationId);
@@ -107,6 +112,31 @@ export const useChatHub = () => {
       useChatStore.getState().setUserOnlineStatus(userId, false);
     };
 
+    const onUserTyping = (payload: any) => {
+      const conversationId = payload?.conversationId || payload?.ConversationId || payload?.id || payload?.Id;
+      const userId = payload?.userId || payload?.UserId || payload?.fromUserId || payload?.FromUserId || payload;
+      const userName = payload?.userName || payload?.UserName || payload?.name || payload?.Name;
+      const currentUserId = useAuthStore.getState().user?.id;
+
+      if (!conversationId || !userId || userId === currentUserId) {
+        return;
+      }
+
+      useChatStore.getState().setUserTyping(conversationId, userId, true, userName);
+    };
+
+    const onUserStopTyping = (payload: any) => {
+      const conversationId = payload?.conversationId || payload?.ConversationId || payload?.id || payload?.Id;
+      const userId = payload?.userId || payload?.UserId || payload?.fromUserId || payload?.FromUserId || payload;
+      const currentUserId = useAuthStore.getState().user?.id;
+
+      if (!conversationId || !userId || userId === currentUserId) {
+        return;
+      }
+
+      useChatStore.getState().setUserTyping(conversationId, userId, false);
+    };
+
     // Lắng nghe có tin nhắn mới
     connection.on("ReceiveMessage", onReceiveMessage);
 
@@ -114,6 +144,10 @@ export const useChatHub = () => {
     connection.on("UserOnline", onUserOnline);
 
     connection.on("UserOffline", onUserOffline);
+
+    connection.on("UserTyping", onUserTyping);
+
+    connection.on("UserStopTyping", onUserStopTyping);
 
     let isMounted = true;
     let startTimer: ReturnType<typeof setTimeout>;
@@ -166,6 +200,8 @@ export const useChatHub = () => {
       connection.off('ReceiveMessage', onReceiveMessage);
       connection.off('UserOnline', onUserOnline);
       connection.off('UserOffline', onUserOffline);
+      connection.off('UserTyping', onUserTyping);
+      connection.off('UserStopTyping', onUserStopTyping);
       if (connection.state !== 'Disconnected') {
         connection.stop().then(() => {
           setIsConnected(false);
@@ -218,8 +254,48 @@ export const useChatHub = () => {
     }
   }, [isConnected]);
 
+  const sendTyping = useCallback(async (conversationId: string, toUserId: string) => {
+    if (!connectionRef.current || !isConnected || !conversationId || !toUserId) {
+      return;
+    }
+
+    const payload = {
+      conversationId,
+      toUserId,
+      ConversationId: conversationId,
+      ToUserId: toUserId
+    };
+
+    try {
+      await connectionRef.current.invoke('TypingToConversation', payload);
+    } catch (error) {
+      console.error('Error sending typing event: ', error);
+    }
+  }, [isConnected]);
+
+  const stopTyping = useCallback(async (conversationId: string, toUserId: string) => {
+    if (!connectionRef.current || !isConnected || !conversationId || !toUserId) {
+      return;
+    }
+
+    const payload = {
+      conversationId,
+      toUserId,
+      ConversationId: conversationId,
+      ToUserId: toUserId
+    };
+
+    try {
+      await connectionRef.current.invoke('StopTypingToConversation', payload);
+    } catch (error) {
+      console.error('Error sending stop typing event: ', error);
+    }
+  }, [isConnected]);
+
   return {
     isConnected,
-    sendMessage
+    sendMessage,
+    sendTyping,
+    stopTyping
   };
 };
