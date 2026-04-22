@@ -68,7 +68,14 @@ export default function SearchOverlay({ query, onClose }: Props) {
              user: targetUser,
              message: '',
              seenMessage: new Date().toISOString(),
-             timeMessage: new Date().toISOString()
+             timeMessage: new Date().toISOString(),
+             boxChatInfo: {
+               lastMessageId: '',
+               lastMessageSenderId: '',
+               opponentLastReadMessageId: '',
+               unreadCount: 0,
+             },
+             lastMessageSenderId: '' // Legacy compatibility
            });
            setActiveConversationId(checkRes.data.conversationId);
            onClose();
@@ -82,7 +89,14 @@ export default function SearchOverlay({ query, onClose }: Props) {
                user: targetUser,
                message: '',
                seenMessage: new Date().toISOString(),
-               timeMessage: new Date().toISOString()
+               timeMessage: new Date().toISOString(),
+               boxChatInfo: {
+                 lastMessageId: '',
+                 lastMessageSenderId: '',
+                 opponentLastReadMessageId: '',
+                 unreadCount: 0,
+               },
+               lastMessageSenderId: '' // Legacy compatibility
              });
              setActiveConversationId(newId);
              onClose();

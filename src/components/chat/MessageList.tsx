@@ -1,19 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { useChatStore } from '../../stores/chatStore';
 import { useAuthStore } from '../../stores/authStore';
 import { chatApi } from '../../lib/api';
 import { Loader2 } from 'lucide-react';
+
 
 const EMPTY_TYPING_USERS: Array<{ userId: string; userName?: string; updatedAt: number }> = [];
 const STALE_TYPING_MAX_AGE_MS = 5000;
 
 interface Props {
   conversationId: string;
+  markAsRead: (messageId: string, conversationId: string, senderUserId: string, isRead: boolean) => Promise<void>;
+  isConnected: boolean;
 }
 
-export default function MessageList({ conversationId }: Props) {
+export default function MessageList({ conversationId, markAsRead, isConnected }: Props) {
   const { messages, setMessages, prependMessages, conversations } = useChatStore();
   const typingByConversationId = useChatStore((state) => state.typingByConversationId);
+  const conversationOpenSignal = useChatStore((state) => state.conversationOpenSignal[conversationId] || 0);
   const currentUserId = useAuthStore(state => state.user?.id);
   const opponentUser = conversations.find(c => c.conversationId === conversationId)?.user;
 
@@ -24,6 +28,69 @@ export default function MessageList({ conversationId }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const currentMessages = messages[conversationId] || [];
+  const activeConversation = useMemo(
+    () => conversations.find((c) => c.conversationId === conversationId),
+    [conversations, conversationId]
+  );
+  const unreadCount = activeConversation?.boxChatInfo?.unreadCount ?? (activeConversation?.isUnread ? 1 : 0);
+
+  const lastMarkedReadIdRef = useRef<string | null>(null);
+  const lastObservedMessageIdRef = useRef<string | null>(null);
+  const hasMountedConversationRef = useRef(false);
+
+  useEffect(() => {
+    lastMarkedReadIdRef.current = null;
+    lastObservedMessageIdRef.current = null;
+    hasMountedConversationRef.current = false;
+  }, [conversationId]);
+
+  // Logic đánh dấu "Đã xem" tập trung: Chỉ gọi Hub 1 lần cho tin nhắn cuối cùng
+  useEffect(() => {
+    if (!currentUserId || !conversationId || currentMessages.length === 0 || !isConnected) return;
+    const lastMessage = currentMessages[currentMessages.length - 1];
+    if (!lastMessage) return;
+
+    // Yêu cầu nghiệp vụ:
+    // - Tin cuối chưa đọc (list đang bold) => gửi isRead = false
+    // - Đang mở chat và có incoming mới vừa đến => gửi isRead = false
+    // - Các trường hợp còn lại => gửi isRead = true
+    const isIncomingLastMessage = lastMessage.fromUserId !== currentUserId;
+    const hasUnreadByConversation = unreadCount > 0 && isIncomingLastMessage;
+
+    const isNewIncomingWhileOpen =
+      hasMountedConversationRef.current &&
+      isIncomingLastMessage &&
+      !!lastObservedMessageIdRef.current &&
+      lastObservedMessageIdRef.current !== lastMessage.id;
+
+    const shouldMarkUnread = hasUnreadByConversation || isNewIncomingWhileOpen;
+    const isRead = !shouldMarkUnread;
+    const currentKey = `${lastMessage.id}:${isRead}:${conversationOpenSignal}`;
+
+    lastObservedMessageIdRef.current = lastMessage.id;
+    hasMountedConversationRef.current = true;
+
+    if (currentKey === lastMarkedReadIdRef.current) return;
+
+    lastMarkedReadIdRef.current = currentKey;
+
+    void (async () => {
+      await markAsRead(lastMessage.id, conversationId, lastMessage.fromUserId, isRead);
+
+      if (shouldMarkUnread && isIncomingLastMessage) {
+        // Đánh dấu ngay ở local (nếu chờ hub có thể bị delay)
+        useChatStore.getState().markMessageAsSeen(conversationId, lastMessage.id);
+      }
+    })();
+  }, [conversationId, currentMessages, currentUserId, markAsRead, isConnected, unreadCount, conversationOpenSignal]);
+
+
+
+  // Tìm ID của tin nhắn cuối cùng đối phương đã đọc
+  const lastReadMessageId = useMemo(() => {
+    const conv = conversations.find(c => c.conversationId === conversationId);
+    return conv?.boxChatInfo?.opponentLastReadMessageId || conv?.lastReadMessageId;
+  }, [conversations, conversationId]);
   const typingUsers = typingByConversationId[conversationId] || EMPTY_TYPING_USERS;
   const isOpponentTyping = typingUsers.some((entry) => {
     if (entry.userId === currentUserId) return false;
@@ -61,6 +128,17 @@ export default function MessageList({ conversationId }: Props) {
       const res = await chatApi.getMessages(conversationId, 20, page);
       if (res.isSuccess && res.data) {
         const fetched = res.data.items.reverse(); // API might return oldest first, or newest first. Need to reverse to match bottom-to-top rendering appropriately depending on API. Usually pagination gives newest page 1, descending. So reverse it to show oldest at top.
+
+        // Fallback phục hồi read cursor khi vào lại chat: lấy tin gần nhất của mình đã được đối phương xem.
+        if (isInitial && currentUserId) {
+          const inferredOpponentReadId = [...fetched]
+            .reverse()
+            .find((m) => m.fromUserId === currentUserId && m.isSeen)?.id;
+
+          if (inferredOpponentReadId) {
+            useChatStore.getState().updateOpponentLastReadMessageId(conversationId, inferredOpponentReadId);
+          }
+        }
 
         if (isInitial) {
           setMessages(conversationId, fetched);
@@ -144,45 +222,63 @@ export default function MessageList({ conversationId }: Props) {
         const showAvatar = !isMine && !isSameSenderAsNext;
         // Tight gap within same-sender group, larger gap between groups
         const marginTop = idx === 0 ? 'mt-0' : isSameSenderAsPrev ? 'mt-0.5' : 'mt-4';
+        
+        // Hiển thị avatar người nhận đã đọc (Messenger style)
+        // Hiện ở tin nhắn cuối cùng đối phương đã đọc (dù là tin của ai)
+        const isLastReadByOpponent = msg.id === lastReadMessageId && opponentUser;
 
         return (
-          <div key={msg.id || idx} className={`flex ${isMine ? 'justify-end' : 'justify-start'} group max-w-full ${marginTop}`}>
-            {!isMine && (
-              <div className="w-10 mr-2.5 flex-shrink-0 flex items-end">
-                {showAvatar ? (
-                  <img
-                    src={opponentUser?.urlAvatar || '/default-avatar.png'}
-                    alt={opponentUser?.name || ''}
-                    className="w-10 h-10 rounded-full object-cover bg-gray-200"
-                  />
-                ) : (
-                  <div className="w-10 h-10" />
-                )}
+          <div key={msg.id || idx} className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} ${marginTop} w-full`}>
+            <div className={`flex items-end gap-2 max-w-[85%] ${isMine ? 'flex-row-reverse' : 'flex-row'}`}>
+              {!isMine && (
+                <div className="w-9 flex-shrink-0">
+                  {showAvatar ? (
+                    <img
+                      src={opponentUser?.urlAvatar || '/default-avatar.png'}
+                      alt={opponentUser?.name || ''}
+                      className="w-9 h-9 rounded-full object-cover bg-gray-200"
+                    />
+                  ) : (
+                    <div className="w-9" />
+                  )}
+                </div>
+              )}
+
+              <div className={`relative group flex flex-col ${isMine ? 'items-end' : 'items-start'} min-w-0`}>
+                <div
+                  className={`py-2 px-4 text-[15px] leading-relaxed break-words w-fit ${isMine
+                    ? `bg-[#8ED8ED] text-gray-900 ${isSameSenderAsPrev && isSameSenderAsNext ? 'rounded-2xl rounded-br-sm'
+                      : isSameSenderAsPrev ? 'rounded-2xl rounded-tr-sm rounded-br-none'
+                        : isSameSenderAsNext ? 'rounded-2xl rounded-br-sm'
+                          : 'rounded-2xl rounded-br-none'
+                    }`
+                    : `bg-white dark:bg-[#2C2C2C] text-gray-900 dark:text-gray-100 shadow-sm ${isSameSenderAsPrev && isSameSenderAsNext ? 'rounded-2xl rounded-bl-sm'
+                      : isSameSenderAsPrev ? 'rounded-2xl rounded-tl-sm rounded-bl-none'
+                        : isSameSenderAsNext ? 'rounded-2xl rounded-bl-sm'
+                          : 'rounded-2xl rounded-bl-none'
+                    }`
+                  }`}
+                >
+                  {msg.content}
+                </div>
+                {/* Timestamp: hiện khi hover */}
+                <span className={`absolute -top-5 text-[10px] text-gray-400 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none ${isMine ? 'right-0' : 'left-0'}`}>
+                  {formatMessageTime(msg.sendTime)}
+                </span>
+              </div>
+            </div>
+            
+            {/* Messenger style: Avatar nhỏ hiện ở góc phải dưới cùng của list */}
+            {isLastReadByOpponent && (
+              <div className={`mt-1 animate-fade-in-up ${!isMine ? 'self-end mr-0.5' : 'mr-0.5'}`}>
+                <img 
+                  src={opponentUser.urlAvatar || '/default-avatar.png'} 
+                  alt="read" 
+                  className="w-3.5 h-3.5 rounded-full border border-white dark:border-[#121212] shadow-sm grayscale-[0.2]"
+                  title={`Đã xem lúc ${formatMessageTime(msg.sendTime)}`}
+                />
               </div>
             )}
-
-            <div className={`max-w-[72%] flex flex-col ${isMine ? 'items-end' : 'items-start'} relative`}>
-              <div
-                className={`py-2.5 px-4 text-[15px] leading-relaxed ${isMine
-                  ? `bg-[#8ED8ED] text-gray-900 ${isSameSenderAsPrev && isSameSenderAsNext ? 'rounded-2xl rounded-br-sm'
-                    : isSameSenderAsPrev ? 'rounded-2xl rounded-tr-sm rounded-br-none'
-                      : isSameSenderAsNext ? 'rounded-2xl rounded-br-sm'
-                        : 'rounded-2xl rounded-br-none'
-                  }`
-                  : `bg-white dark:bg-[#2C2C2C] text-gray-900 dark:text-gray-100 shadow-sm ${isSameSenderAsPrev && isSameSenderAsNext ? 'rounded-2xl rounded-bl-sm'
-                    : isSameSenderAsPrev ? 'rounded-2xl rounded-tl-sm rounded-bl-none'
-                      : isSameSenderAsNext ? 'rounded-2xl rounded-bl-sm'
-                        : 'rounded-2xl rounded-bl-none'
-                  }`
-                  }`}
-              >
-                {msg.content}
-              </div>
-              {/* Timestamp: absolute để không chiếm không gian layout, hiện khi hover */}
-              <span className={`absolute -top-5 text-xs text-gray-400 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none ${isMine ? 'right-0' : 'left-0'}`}>
-                {formatMessageTime(msg.sendTime)}
-              </span>
-            </div>
           </div>
         );
       })}

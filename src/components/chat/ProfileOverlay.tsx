@@ -9,6 +9,115 @@ interface ProfileOverlayProps {
   onClose: () => void;
 }
 
+const KB = 1024;
+const AVATAR_TARGET_MIN_BYTES = 100 * KB;
+const AVATAR_TARGET_MAX_BYTES = 150 * KB;
+const AVATAR_MAX_DIMENSION = 1080;
+const AVATAR_MIN_DIMENSION = 280;
+
+const loadImageFromFile = (file: File): Promise<HTMLImageElement> => {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const img = new Image();
+
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(img);
+    };
+
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Không thể đọc file ảnh.'));
+    };
+
+    img.src = objectUrl;
+  });
+};
+
+const canvasToBlob = (canvas: HTMLCanvasElement, quality: number): Promise<Blob> => {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error('Không thể nén ảnh.'));
+          return;
+        }
+        resolve(blob);
+      },
+      'image/webp',
+      quality,
+    );
+  });
+};
+
+const optimizeAvatarFile = async (file: File): Promise<File> => {
+  if (file.size <= AVATAR_TARGET_MAX_BYTES) {
+    return file;
+  }
+
+  const img = await loadImageFromFile(file);
+  const sourceWidth = img.naturalWidth;
+  const sourceHeight = img.naturalHeight;
+  const largestSide = Math.max(sourceWidth, sourceHeight);
+  const baseScale = largestSide > AVATAR_MAX_DIMENSION ? AVATAR_MAX_DIMENSION / largestSide : 1;
+
+  let scale = baseScale;
+  let quality = 0.88;
+  let bestBlob: Blob | null = null;
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const width = Math.max(Math.round(sourceWidth * scale), AVATAR_MIN_DIMENSION);
+    const height = Math.max(Math.round(sourceHeight * scale), AVATAR_MIN_DIMENSION);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Không thể xử lý ảnh trên trình duyệt này.');
+    }
+
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, 0, 0, width, height);
+
+    const blob = await canvasToBlob(canvas, quality);
+    bestBlob = blob;
+
+    if (blob.size <= AVATAR_TARGET_MAX_BYTES && blob.size >= AVATAR_TARGET_MIN_BYTES) {
+      break;
+    }
+
+    if (blob.size <= AVATAR_TARGET_MAX_BYTES) {
+      break;
+    }
+
+    if (quality > 0.62) {
+      quality -= 0.08;
+      continue;
+    }
+
+    const canReduceDimension = Math.min(width, height) > AVATAR_MIN_DIMENSION;
+    if (!canReduceDimension) {
+      break;
+    }
+
+    scale *= 0.88;
+    quality = Math.min(quality + 0.04, 0.8);
+  }
+
+  if (!bestBlob) {
+    throw new Error('Không thể tối ưu ảnh đại diện.');
+  }
+
+  const outputName = `${file.name.replace(/\.[^/.]+$/, '') || 'avatar'}.webp`;
+  return new File([bestBlob], outputName, {
+    type: 'image/webp',
+    lastModified: Date.now(),
+  });
+};
+
 export default function ProfileOverlay({ onClose }: ProfileOverlayProps) {
   const user = useAuthStore((state) => state.user);
   const accessToken = useAuthStore((state) => state.accessToken);
@@ -105,7 +214,8 @@ export default function ProfileOverlay({ onClose }: ProfileOverlayProps) {
 
     setIsSaving(true);
     try {
-      const res = await chatApi.uploadAvatar(selectedFile);
+      const optimizedFile = await optimizeAvatarFile(selectedFile);
+      const res = await chatApi.uploadAvatar(optimizedFile);
       const uploadedUrl = res.data?.url;
 
       if (!uploadedUrl) {

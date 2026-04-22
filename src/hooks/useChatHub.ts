@@ -3,13 +3,15 @@ import { HubConnection, HubConnectionBuilder, LogLevel, HttpTransportType } from
 import { APP_CONFIG } from '../lib/constants';
 import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
+import { useToastStore } from '../stores/toastStore';
 
-export const useChatHub = () => {
+const useChatHub = () => {
   const [isConnected, setIsConnected] = useState(false);
   const connectionRef = useRef<HubConnection | null>(null);
   const pendingSelfMessagesRef = useRef<Array<{
     conversationId: string;
     content: string;
+    tempId: string;
     createdAtMs: number;
   }>>([]);
 
@@ -42,14 +44,17 @@ export const useChatHub = () => {
     connectionRef.current = connection;
 
     const onReceiveMessage = async (msg: any) => {
-      const conversationId = msg.id || msg.Id;
+      const serverMessageId = msg.id || msg.Id || msg.messageId || msg.MessageId;
+      const conversationId = msg.conversationId || msg.ConversationId;
       const msgContent = msg.content || msg.Content;
       const msgSendTime = msg.sendTime || msg.SendTime;
       const msgFromUserId = msg.fromUserId || msg.FromUserId;
-      const serverMessageId = msg.messageId || msg.MessageId;
       const currentUserId = useAuthStore.getState().user?.id;
+      const activeConversationId = useChatStore.getState().activeConversationId;
 
-      if (!conversationId) return;
+      if (!conversationId || !serverMessageId || !msgFromUserId || !msgContent) {
+        return;
+      }
 
       if (currentUserId && msgFromUserId === currentUserId) {
         const pendingIndex = pendingSelfMessagesRef.current.findIndex((item) => {
@@ -61,17 +66,24 @@ export const useChatHub = () => {
         });
 
         if (pendingIndex !== -1) {
+          const pendingMsg = pendingSelfMessagesRef.current[pendingIndex];
           pendingSelfMessagesRef.current.splice(pendingIndex, 1);
+          // Cập nhật ID thật từ server cho tin nhắn đang hiển thị
+          if (serverMessageId && pendingMsg.tempId) {
+            useChatStore.getState().updateMessageId(conversationId, pendingMsg.tempId, serverMessageId);
+          }
           return;
         }
       }
 
+      // Cập nhật nội dung tin nhắn cuối cùng vào store
       useChatStore.getState().addMessage(conversationId, {
-        id: serverMessageId || crypto.randomUUID(),
+        id: serverMessageId,
         content: msgContent,
         sendTime: msgSendTime,
         fromUserId: msgFromUserId
       });
+      
       if (msgFromUserId) {
         useChatStore.getState().setUserTyping(conversationId, msgFromUserId, false);
       }
@@ -79,28 +91,59 @@ export const useChatHub = () => {
       const currentConversations = useChatStore.getState().conversations;
       const conversationExists = currentConversations.some(c => c.conversationId === conversationId);
 
+      let senderName = "";
+      let senderAvatar = "";
+      let senderIsOnline = useChatStore.getState().onlineUsers[msgFromUserId] ?? false;
+
       if (!conversationExists) {
         try {
           const { chatApi } = await import('../lib/api');
           const profileRes = await chatApi.getUserProfile(msgFromUserId);
           if (profileRes.isSuccess && profileRes.data) {
-             useChatStore.getState().addConversation({
-               conversationId,
-               user: profileRes.data,
-               message: msgContent,
-               seenMessage: msgSendTime,
-               timeMessage: msgSendTime
-             });
+            senderName = profileRes.data.name || profileRes.data.userName || "Người dùng";
+            senderAvatar = profileRes.data.urlAvatar || "";
+            senderIsOnline = profileRes.data.isOnline ?? senderIsOnline;
+            useChatStore.getState().addConversation({
+              conversationId,
+              user: profileRes.data,
+              message: msgContent,
+              seenMessage: msgSendTime,
+              timeMessage: msgSendTime,
+              boxChatInfo: {
+                lastMessageId: serverMessageId,
+                lastMessageSenderId: msgFromUserId,
+                opponentLastReadMessageId: '',
+                unreadCount: activeConversationId === conversationId ? 0 : 1,
+              },
+              lastMessageSenderId: msgFromUserId
+            });
           }
         } catch (error) {
           console.error("Failed to fetch sender profile: ", error);
+          senderName = "Người dùng";
         }
       } else {
-        useChatStore.getState().updateConversationLastMessage(conversationId, msgContent, msgSendTime);
+        const conv = currentConversations.find(c => c.conversationId === conversationId);
+        if (conv) {
+          senderName = conv.user.name || conv.user.userName || "Người dùng";
+          senderAvatar = conv.user.urlAvatar || "";
+          senderIsOnline = useChatStore.getState().onlineUsers[msgFromUserId] ?? conv.user.isOnline ?? false;
+        }
+        useChatStore.getState().updateConversationLastMessage(conversationId, msgContent, msgSendTime, msgFromUserId);
       }
 
-      if (!useChatStore.getState().activeConversationId) {
-         useChatStore.getState().setActiveConversationId(conversationId);
+      if (msgFromUserId && msgFromUserId !== currentUserId) {
+        const shouldNotify = !activeConversationId || activeConversationId !== conversationId;
+        if (shouldNotify) {
+          useToastStore.getState().addChatToast({
+            conversationId,
+            userName: senderName,
+            userAvatar: senderAvatar,
+            message: msgContent,
+            time: msgSendTime,
+            isOnline: senderIsOnline
+          });
+        }
       }
     };
 
@@ -137,6 +180,14 @@ export const useChatHub = () => {
       useChatStore.getState().setUserTyping(conversationId, userId, false);
     };
 
+    const onMessageSeen = (data: any) => {
+      const conversationId = data.conversationId || data.ConversationId;
+      const messageId = data.messageId || data.MessageId;
+      if (conversationId && messageId) {
+        useChatStore.getState().markMessageAsSeen(conversationId, messageId);
+      }
+    };
+
     // Lắng nghe có tin nhắn mới
     connection.on("ReceiveMessage", onReceiveMessage);
 
@@ -148,6 +199,8 @@ export const useChatHub = () => {
     connection.on("UserTyping", onUserTyping);
 
     connection.on("UserStopTyping", onUserStopTyping);
+
+    connection.on("MessageSeen", onMessageSeen);
 
     let isMounted = true;
     let startTimer: ReturnType<typeof setTimeout>;
@@ -202,6 +255,7 @@ export const useChatHub = () => {
       connection.off('UserOffline', onUserOffline);
       connection.off('UserTyping', onUserTyping);
       connection.off('UserStopTyping', onUserStopTyping);
+      connection.off('MessageSeen', onMessageSeen);
       if (connection.state !== 'Disconnected') {
         connection.stop().then(() => {
           setIsConnected(false);
@@ -230,9 +284,11 @@ export const useChatHub = () => {
         // Theo DOCs, phải tự thêm tin nhắn này vào state cục bộ
         const currentUserId = useAuthStore.getState().user?.id;
         if (currentUserId) {
+          const tempId = crypto.randomUUID();
           pendingSelfMessagesRef.current.push({
             conversationId,
             content,
+            tempId,
             createdAtMs: Date.now(),
           });
           pendingSelfMessagesRef.current = pendingSelfMessagesRef.current.filter((item) => {
@@ -240,12 +296,12 @@ export const useChatHub = () => {
           });
 
           useChatStore.getState().addMessage(conversationId, {
-            id: crypto.randomUUID(),
+            id: tempId,
             content,
             sendTime: payload.sendTime,
             fromUserId: currentUserId
           });
-          useChatStore.getState().updateConversationLastMessage(conversationId, content, payload.sendTime);
+          useChatStore.getState().updateConversationLastMessage(conversationId, content, payload.sendTime, currentUserId);
         }
       } catch (error) {
         console.error("Error sending message: ", error);
@@ -292,10 +348,40 @@ export const useChatHub = () => {
     }
   }, [isConnected]);
 
+  const markAsRead = useCallback(async (messageId: string, conversationId: string, senderUserId: string, isRead: boolean) => {
+    if (!connectionRef.current || !isConnected) return;
+
+
+    try {
+      const payload = {
+        messageId,
+        conversationId,
+        senderUserId,
+        isRead,
+        MessageId: messageId,
+        ConversationId: conversationId,
+        SenderUserId: senderUserId,
+        IsRead: isRead
+      };
+      await connectionRef.current.invoke("MarkMessageAsRead", payload);
+
+      // Chỉ khi trước đó là trạng thái chưa đọc thì mới clear cờ unread local.
+      if (!isRead) {
+        useChatStore.getState().setConversationUnread(conversationId, false);
+      }
+    } catch (error) {
+      console.error("Error marking message as read: ", error);
+    }
+  }, [isConnected]);
+
   return {
     isConnected,
     sendMessage,
     sendTyping,
-    stopTyping
+    stopTyping,
+    markAsRead
   };
 };
+
+export { useChatHub };
+export default useChatHub;

@@ -26,7 +26,13 @@
                 },
                 "message": "hello",
                 "seenMessage": "0001-01-01T00:00:00+00:00",
-                "timeMessage": "2026-04-11T18:12:08.934+07:00"
+                "timeMessage": "2026-04-11T18:12:08.934+07:00",
+                "boxChatInfo": {
+                  "lastMessageId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+                  "lastMessageSenderId": "b68cd123-f2cb-4a18-b216-af1a014f4be8",
+                  "opponentLastReadMessageId": "d290f1ee-6c54-4b01-90e6-d701748f0851",
+                  "unreadCount": 2
+                }
             }
         ],
         "currentPage": 1,
@@ -78,3 +84,10 @@
 }
 ```
 ---
+
+## các mục nên có sau này (dành cho server) để tối ưu trải nghiệm chat realtime
+lastMessageType: text, image, file, system... để render preview đúng.
+lastMessageStatusForCurrentUser: sent, delivered, seen (status đã tính sẵn cho tin cuối từ góc nhìn user hiện tại).
+updatedAt: thời gian cập nhật đoạn chat gần nhất, để sort ổn định.
+participantsReadCursor: mỗi participant có lastReadMessageId/readAt (nếu sau này hỗ trợ group chat).
+lastMessagePreview: preview đã được server chuẩn hóa (nếu tin nhắn đặc biệt như ảnh, file, sticker).

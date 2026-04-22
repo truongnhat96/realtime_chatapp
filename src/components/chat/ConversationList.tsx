@@ -7,7 +7,7 @@ import { Loader2 } from 'lucide-react';
 const PAGE_SIZE = 10;
 
 export default function ConversationList() {
-  const { conversations, activeConversationId, setActiveConversationId, onlineUsers, setConversations, appendConversations } = useChatStore();
+  const { conversations, messages, activeConversationId, openConversation, onlineUsers, setConversations, appendConversations } = useChatStore();
   const currentUserId = useAuthStore(state => state.user?.id);
 
   const [isLoading, setIsLoading] = useState(false);
@@ -57,7 +57,7 @@ export default function ConversationList() {
   };
 
   const handleSelect = (id: string) => {
-    setActiveConversationId(id);
+    openConversation(id);
   };
 
   const formatTime = (isoString: string) => {
@@ -88,6 +88,19 @@ export default function ConversationList() {
       {conversations.map((conv) => {
         const isOnline = onlineUsers[conv.user.id] ?? conv.user.isOnline;
         const isActive = activeConversationId === conv.conversationId;
+        const rawUnreadCount = conv.boxChatInfo?.unreadCount ?? (conv.isUnread ? 1 : 0);
+
+        const cachedLastMessage = messages[conv.conversationId]?.[messages[conv.conversationId].length - 1];
+        const lastSenderId = conv.boxChatInfo?.lastMessageSenderId || conv.lastMessageSenderId || cachedLastMessage?.fromUserId;
+        const lastMessageId = conv.boxChatInfo?.lastMessageId || cachedLastMessage?.id;
+        const opponentLastReadMessageId = conv.boxChatInfo?.opponentLastReadMessageId || conv.lastReadMessageId;
+        const isMine = !!lastSenderId && !!currentUserId && lastSenderId.toLowerCase() === currentUserId.toLowerCase();
+        // Tin nhắn cuối là của mình thì không hiển thị trạng thái unread.
+        const unreadCount = isMine ? 0 : rawUnreadCount;
+        const isUnread = unreadCount > 0;
+
+        // Avatar "đã xem" chỉ hiện khi tin nhắn cuối là của mình và đối phương đã đọc đúng tin nhắn cuối.
+        const isSeenByOpponent = isMine && !isUnread && !!lastMessageId && opponentLastReadMessageId === lastMessageId;
 
         return (
           <div
@@ -108,12 +121,24 @@ export default function ConversationList() {
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex justify-between items-baseline mb-1">
-                <h4 className="text-[15px] text-gray-900 dark:text-white font-semibold truncate pr-2">{conv.user.name}</h4>
-                <span className="text-xs text-gray-400 flex-shrink-0">{formatTime(conv.timeMessage)}</span>
+                <h4 className={`text-[15px] truncate pr-2 ${isUnread ? 'text-gray-900 dark:text-white font-bold' : 'text-gray-900 dark:text-white font-semibold'}`}>
+                  {conv.user.name}
+                </h4>
+                <span className={`text-xs flex-shrink-0 ${isUnread ? 'text-[#8ED8ED] font-bold' : 'text-gray-400'}`}>
+                  {formatTime(conv.timeMessage)}
+                </span>
               </div>
-              <p className={`text-sm truncate ${isActive ? 'text-gray-900 dark:text-gray-300' : 'text-gray-500 dark:text-gray-400'}`}>
-                {conv.message}
-              </p>
+              <div className="flex justify-between items-center gap-2">
+                <p className={`text-sm truncate flex-1 ${isUnread ? 'text-gray-900 dark:text-white font-bold' : isActive ? 'text-gray-900 dark:text-gray-300' : 'text-gray-500 dark:text-gray-400'}`}>
+                  {isMine && <span className="mr-1">Bạn:</span>}
+                  {conv.message}
+                </p>
+                {isUnread ? (
+                  <div className="w-2.5 h-2.5 bg-[#8ED8ED] rounded-full flex-shrink-0"></div>
+                ) : isSeenByOpponent ? (
+                  <img src={conv.user.urlAvatar || '/default-avatar.png'} alt="seen" className="w-4 h-4 rounded-full flex-shrink-0 grayscale-[0.5]" />
+                ) : null}
+              </div>
             </div>
           </div>
         );

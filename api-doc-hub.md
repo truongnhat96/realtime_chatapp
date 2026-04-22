@@ -47,7 +47,8 @@ Luồng nhắn tin được xử lý thông qua hàm `SendMessageToConversation`
    - Payload trả về cho Frontend (`MessageRecieve`) bao gồm:
      ```typescript
      {
-        id: string;             // Trùng với conversationId
+        id: string;             // Chính là MessageId
+        conversationId: string; // GUID của cuộc hội thoại
         fromUserId: string;     // GUID của người gửi
         content: string;        // Nội dung tin nhắn
         sendTime: Date;         // Thời gian nhắn

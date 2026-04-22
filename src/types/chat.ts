@@ -8,12 +8,24 @@ export interface User {
   isOnline?: boolean;
 }
 
+export interface BoxChatInfo {
+  lastMessageId?: string;
+  lastMessageSenderId?: string;
+  opponentLastReadMessageId?: string;
+  unreadCount?: number;
+}
+
 export interface ConversationItem {
   conversationId: string;
   user: User;
   message: string;
-  seenMessage: string;
+  seenMessage: string; // Đây thường là tin nhắn cuối mà bạn đã xem (hoặc của họ gửi cho bạn)
   timeMessage: string;
+  boxChatInfo?: BoxChatInfo;
+  isUnread?: boolean; // Tự thêm để quản lý trạng thái highlight blue dot
+  // Legacy fields kept for backward compatibility while server rollout completes.
+  lastReadMessageId?: string;
+  lastMessageSenderId?: string;
 }
 
 export interface MessageItem {
@@ -21,6 +33,21 @@ export interface MessageItem {
   content: string;
   sendTime: string;
   fromUserId: string;
+  isSeen?: boolean; // Đã được đối phương xem chưa
+}
+
+// Read Receipt Payload
+export interface MessageReadDto {
+  messageId: string;
+  conversationId: string;
+  senderUserId: string;
+}
+
+export interface MessageSeenResponse {
+  conversationId: string;
+  messageId: string;
+  readByUserId: string;
+  readAt: string;
 }
 
 // Responses

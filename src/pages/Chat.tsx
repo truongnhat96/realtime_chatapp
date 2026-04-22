@@ -1,6 +1,6 @@
 import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
-import { useChatHub } from '../hooks/useChatHub';
+import useChatHub from '../hooks/useChatHub';
 // We haven't created these yet, assume they exist
 import ChatSidebar from '../components/chat/ChatSidebar';
 import ChatArea from '../components/chat/ChatArea.tsx';
@@ -11,7 +11,7 @@ export default function Chat() {
   const { activeConversationId } = useChatStore();
 
   // Khởi tạo SignalR
-  const { isConnected, sendMessage, sendTyping, stopTyping } = useChatHub();
+  const { isConnected, sendMessage, sendTyping, stopTyping, markAsRead } = useChatHub();
 
   if (!hasHydrated || !user) return null;
 
@@ -29,6 +29,7 @@ export default function Chat() {
             sendMessage={sendMessage}
             sendTyping={sendTyping}
             stopTypingSignal={stopTyping}
+            markAsRead={markAsRead}
             isConnected={isConnected}
           />
         ) : (

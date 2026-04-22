@@ -10,10 +10,11 @@ interface Props {
   sendMessage: (conversationId: string, content: string, toUserId: string) => Promise<void>;
   sendTyping: (conversationId: string, toUserId: string) => Promise<void>;
   stopTypingSignal: (conversationId: string, toUserId: string) => Promise<void>;
+  markAsRead: (messageId: string, conversationId: string, senderUserId: string, isRead: boolean) => Promise<void>;
   isConnected: boolean;
 }
 
-export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, isConnected }: Props) {
+export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, markAsRead, isConnected }: Props) {
   const { conversations, activeConversationId, setActiveConversationId, onlineUsers } = useChatStore();
   const currentUserId = useAuthStore((state) => state.user?.id);
 
@@ -84,7 +85,7 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, is
       </div>
 
       {/* Messages */}
-      <MessageList conversationId={activeConversationId} />
+      <MessageList conversationId={activeConversationId} markAsRead={markAsRead} isConnected={isConnected} />
 
       {/* Input */}
       <ChatInput
