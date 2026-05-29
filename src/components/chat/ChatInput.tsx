@@ -1,25 +1,111 @@
-import { useState } from 'react';
-import { Send, Smile, Paperclip } from 'lucide-react';
+import { useState, useRef, useCallback } from 'react';
+import { Send, Smile, Paperclip, ImagePlus, X, FileText, Plus } from 'lucide-react';
 
 interface Props {
   onSendMessage: (text: string) => void | Promise<void>;
+  onSendMediaFiles: (files: File[], content: string | null) => void | Promise<void>;
   onTypingInputChange?: (value: string) => void;
   onStopTyping?: () => void;
   disabled?: boolean;
 }
 
-export default function ChatInput({ onSendMessage, onTypingInputChange, onStopTyping, disabled }: Props) {
+/** Detect messageType từ MIME: 1=Image, 2=Video, 3=File */
+const detectMessageType = (file: File): number => {
+  if (file.type.startsWith('image/')) return 1;
+  if (file.type.startsWith('video/')) return 2;
+  return 3;
+};
+
+/** Format file size cho hiển thị */
+const formatFileSize = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+type FileAttachment = {
+  file: File;
+  previewUrl?: string;
+  id: string;
+};
+
+export default function ChatInput({ onSendMessage, onSendMediaFiles, onTypingInputChange, onStopTyping, disabled }: Props) {
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [selectedFiles, setSelectedFiles] = useState<FileAttachment[]>([]);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const mediaInputRef = useRef<HTMLInputElement>(null);
+  const previewContainerRef = useRef<HTMLDivElement>(null);
+
+  const handleFilesSelect = useCallback((files: FileList | null, inputRef: React.RefObject<HTMLInputElement | null>) => {
+    if (!files || files.length === 0) return;
+
+    const newAttachments: FileAttachment[] = Array.from(files).map(file => {
+      const type = detectMessageType(file);
+      return {
+        file,
+        previewUrl: (type === 1 || type === 2) ? URL.createObjectURL(file) : undefined,
+        id: crypto.randomUUID()
+      };
+    });
+
+    setSelectedFiles(prev => [...prev, ...newAttachments]);
+
+    // Clear input value so the same file can be selected again
+    if (inputRef.current) {
+      inputRef.current.value = '';
+    }
+  }, []);
+
+  const removeFile = useCallback((id: string) => {
+    setSelectedFiles(prev => {
+      const item = prev.find(p => p.id === id);
+      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      return prev.filter(p => p.id !== id);
+    });
+  }, []);
+
+  const clearAllFiles = useCallback(() => {
+    setSelectedFiles(prev => {
+      prev.forEach(item => {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      });
+      return [];
+    });
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (mediaInputRef.current) mediaInputRef.current.value = '';
+  }, []);
 
   const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault();
-
     const trimmedMessage = message.trim();
-    if (!trimmedMessage || disabled || isSending) {
+
+    if (selectedFiles.length > 0) {
+      if (disabled || isSending) return;
+      const filesToSend = selectedFiles.map(s => s.file);
+      // Xóa preview + text ngay lập tức
+      setMessage('');
+      onTypingInputChange?.('');
+      clearAllFiles();
+      setIsSending(true);
+      try {
+        // Gửi text riêng nếu có
+        if (trimmedMessage) {
+          await Promise.resolve(onSendMessage(trimmedMessage));
+        }
+        // Gửi files
+        await Promise.resolve(onSendMediaFiles(filesToSend, null));
+      } catch (error) {
+        console.error('Failed to send media: ', error);
+      } finally {
+        setIsSending(false);
+      }
       return;
     }
 
+    // Chỉ gửi text
+    if (!trimmedMessage || disabled || isSending) return;
     setIsSending(true);
     try {
       await Promise.resolve(onSendMessage(trimmedMessage));
@@ -38,44 +124,173 @@ export default function ChatInput({ onSendMessage, onTypingInputChange, onStopTy
     }
   };
 
+  const canSend = selectedFiles.length > 0 || message.trim();
+
   return (
-    <div className="p-4 bg-white dark:bg-[#1E1E1E] border-t border-gray-200 dark:border-gray-800">
-      <div className="flex items-center gap-2 bg-gray-100 dark:bg-[#2C2C2C] rounded-full p-2 pr-2.5 transition-colors">
-        <button className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-full transition-colors">
-          <Smile size={22} />
-        </button>
-        <button className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-full transition-colors mr-1">
-          <Paperclip size={22} />
-        </button>
-        
-        <input
-          type="text"
-          value={message}
-          onChange={(e) => {
-            const nextValue = e.target.value;
-            setMessage(nextValue);
-            onTypingInputChange?.(nextValue);
-          }}
-          onKeyDown={handleKeyDown}
-          onBlur={onStopTyping}
-          placeholder={disabled ? "Đang kết nối..." : "Nhập tin nhắn..."}
-          className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-[15px] text-gray-900 dark:text-gray-100 placeholder-gray-500"
-        />
-        
-        <button
-          onClick={() => {
-            void handleSend();
-          }}
-          disabled={!message.trim() || disabled || isSending}
-          className={`p-2.5 rounded-full transition-all flex items-center justify-center
-            ${message.trim() 
-              ? 'bg-[#8ED8ED] text-white hover:bg-[#7bc8dd]' 
-              : 'bg-gray-200 dark:bg-gray-700 text-gray-400'
-            }
-          `}
-        >
-          <Send size={20} className={message.trim() ? "ml-0.5" : ""} />
-        </button>
+    <div className="bg-white dark:bg-[#1E1E1E] border-t border-gray-200 dark:border-gray-800">
+      {/* Preview area - danh sách file đã chọn */}
+      {selectedFiles.length > 0 && (
+        <div className="px-4">
+          <div
+            ref={previewContainerRef}
+            className="flex items-center gap-3 overflow-x-auto py-4 scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600"
+          >
+            {/* Nút thêm file */}
+            <button
+              onClick={() => mediaInputRef.current?.click()}
+              className="w-14 h-14 rounded-xl border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center flex-shrink-0 hover:border-[#8ED8ED] hover:text-[#8ED8ED] transition-colors text-gray-400 self-center"
+              title="Thêm file"
+            >
+              <Plus size={22} />
+            </button>
+
+            {selectedFiles.map((item) => {
+              const file = item.file;
+              const type = detectMessageType(file);
+              const previewUrl = item.previewUrl;
+
+              if (type === 3) {
+                // Hiển thị dạng file (ngang giống Messenger)
+                return (
+                  <div key={item.id} className="relative flex-shrink-0 group">
+                    {/* Nút xóa */}
+                    <button
+                      onClick={() => removeFile(item.id)}
+                      className="absolute -top-2 -right-2 w-5 h-5 bg-gray-500 hover:bg-gray-600 text-white rounded-full flex items-center justify-center transition-colors z-10 opacity-0 group-hover:opacity-100 shadow-sm"
+                    >
+                      <X size={12} />
+                    </button>
+
+                    <div className="flex items-center gap-3 px-3 py-2 bg-gray-100 dark:bg-[#333333] rounded-xl flex-shrink-0 border border-gray-200 dark:border-gray-700 w-48 shadow-sm">
+                      <div className="w-10 h-10 rounded-lg bg-gray-200 dark:bg-gray-600 flex items-center justify-center flex-shrink-0">
+                        <FileText size={20} className="text-gray-500 dark:text-gray-400" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100 truncate" title={file.name}>
+                          {file.name}
+                        </p>
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                          {formatFileSize(file.size)}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
+              // Hiển thị dạng ảnh/video
+              return (
+                <div key={item.id} className="relative flex-shrink-0 group self-center mt-1">
+                  {/* Nút xóa */}
+                  <button
+                    onClick={() => removeFile(item.id)}
+                    className="absolute -top-2 -right-2 w-5 h-5 bg-gray-500 hover:bg-gray-600 text-white rounded-full flex items-center justify-center transition-colors z-10 opacity-0 group-hover:opacity-100 shadow-sm"
+                  >
+                    <X size={12} />
+                  </button>
+
+                  {type === 1 && previewUrl && (
+                    <img
+                      src={previewUrl}
+                      alt={file.name}
+                      className="w-14 h-14 rounded-xl object-cover bg-gray-200 dark:bg-gray-700 shadow-sm"
+                    />
+                  )}
+                  {type === 2 && previewUrl && (
+                    <video
+                      src={previewUrl}
+                      className="w-14 h-14 rounded-xl object-cover bg-gray-200 dark:bg-gray-700 shadow-sm"
+                      muted
+                    />
+                  )}
+
+                  {/* File size tooltip */}
+                  <span className="absolute -bottom-5 left-1/2 -translate-x-1/2 text-[10px] text-gray-400 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                    {formatFileSize(file.size)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Input row */}
+      <div className="p-4">
+        <div className="flex items-center gap-2 bg-gray-100 dark:bg-[#2C2C2C] rounded-full p-2 pr-2.5 transition-colors">
+          <button className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-full transition-colors">
+            <Smile size={22} />
+          </button>
+
+          {/* Nút chọn ảnh/video */}
+          <button
+            onClick={() => mediaInputRef.current?.click()}
+            className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-full transition-colors"
+            title="Gửi ảnh hoặc video"
+          >
+            <ImagePlus size={22} />
+          </button>
+
+          {/* Nút chọn file */}
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-full transition-colors mr-1"
+            title="Đính kèm file"
+          >
+            <Paperclip size={22} />
+          </button>
+
+          {/* Hidden file inputs - multiple */}
+          <input
+            ref={mediaInputRef}
+            type="file"
+            accept="image/*,video/*"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              handleFilesSelect(e.target.files, mediaInputRef);
+            }}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="*"
+            multiple
+            className="hidden"
+            onChange={(e) => {
+              handleFilesSelect(e.target.files, fileInputRef);
+            }}
+          />
+
+          <input
+            type="text"
+            value={message}
+            onChange={(e) => {
+              const nextValue = e.target.value;
+              setMessage(nextValue);
+              onTypingInputChange?.(nextValue);
+            }}
+            onKeyDown={handleKeyDown}
+            onBlur={onStopTyping}
+            placeholder={disabled ? "Đang kết nối..." : "Nhập tin nhắn..."}
+            className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-[15px] text-gray-900 dark:text-gray-100 placeholder-gray-500"
+          />
+
+          <button
+            onClick={() => {
+              void handleSend();
+            }}
+            disabled={!canSend || disabled || isSending}
+            className={`p-2.5 rounded-full transition-all flex items-center justify-center
+              ${canSend
+                ? 'bg-[#8ED8ED] text-white hover:bg-[#7bc8dd]'
+                : 'bg-gray-200 dark:bg-gray-700 text-gray-400'
+              }
+            `}
+          >
+            <Send size={20} className={canSend ? "ml-0.5" : ""} />
+          </button>
+        </div>
       </div>
     </div>
   );

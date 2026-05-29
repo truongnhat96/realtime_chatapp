@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import type { ConversationItem, MessageItem } from '../types/chat';
+import type { ConversationItem, MessageItem, ParticipantInfo } from '../types/chat';
+import { useAuthStore } from './authStore';
 
 const normalizeId = (value?: string) => {
   const trimmed = value?.trim();
@@ -42,10 +43,24 @@ interface ChatState {
   clearTypingConversation: (conversationId: string) => void;
   clearStaleTyping: (conversationId: string, maxAgeMs?: number) => void;
   setConversationUnread: (conversationId: string, isUnread: boolean) => void;
-  markMessageAsSeen: (conversationId: string, messageId: string) => void;
+  markMessageAsSeen: (conversationId: string, messageId: string, readByUserId?: string) => void;
   updateOpponentLastReadMessageId: (conversationId: string, messageId: string) => void;
   updateMessageId: (conversationId: string, tempId: string, serverId: string) => void;
   bumpConversationOpenSignal: (conversationId: string) => void;
+
+  // Media message actions
+  updateMessageProgress: (conversationId: string, tempId: string, progress: number) => void;
+  updateMessageError: (conversationId: string, tempId: string, errorMsg: string) => void;
+  finalizeMediaMessage: (conversationId: string, tempId: string, serverId: string, url: string, attachments?: import('../types/chat').Attachment[]) => void;
+
+  // Group chat actions
+  removeConversation: (conversationId: string) => void;
+  markConversationAsRemoved: (conversationId: string) => void;
+  updateConversationParticipants: (conversationId: string, participants: ParticipantInfo[], memberCount: number) => void;
+  addParticipantsToConversation: (conversationId: string, newMembers: ParticipantInfo[], memberCount: number) => void;
+  removeParticipantFromConversation: (conversationId: string, userId: string, memberCount: number) => void;
+  updateParticipantRole: (conversationId: string, userId: string, newRole: number) => void;
+  addSystemMessages: (conversationId: string, messages: string[]) => void;
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -157,60 +172,64 @@ export const useChatStore = create<ChatState>((set) => ({
 
     const lastMessage = existingMsgs[existingMsgs.length - 1];
     if (lastMessage) {
-      const lastTime = new Date(lastMessage.sendTime || '').getTime();
-      const nextTime = new Date(message.sendTime || '').getTime();
-      const isNearDuplicate =
-        lastMessage.fromUserId === message.fromUserId &&
-        lastMessage.content === message.content &&
-        Number.isFinite(lastTime) &&
-        Number.isFinite(nextTime) &&
-        Math.abs(lastTime - nextTime) <= 2000;
+      // Bỏ qua check duplicate cho tin nhắn temp media (có isLoading)
+      if (!message.isLoading && !lastMessage.isLoading) {
+        const lastTime = new Date(lastMessage.sendTime || '').getTime();
+        const nextTime = new Date(message.sendTime || '').getTime();
+        const isNearDuplicate =
+          lastMessage.fromUserId === message.fromUserId &&
+          lastMessage.content === message.content &&
+          Number.isFinite(lastTime) &&
+          Number.isFinite(nextTime) &&
+          Math.abs(lastTime - nextTime) <= 2000;
 
-      if (isNearDuplicate) {
-        return state;
+        if (isNearDuplicate) {
+          return state;
+        }
       }
     }
 
     // Nếu tin nhắn từ người khác và không phải hội thoại đang mở, đánh dấu là chưa đọc
-    const targetConv = state.conversations.find(c => c.conversationId === conversationId);
-    // Tin nhắn đến (từ đối phương) khi fromUserId === targetConv.user.id
-    const isIncoming = targetConv ? message.fromUserId === targetConv.user.id : false;
+    // const targetConv = state.conversations.find(c => c.conversationId === conversationId);
+    const currentUserId = useAuthStore.getState().user?.id;
+    // Tin nhắn đến (từ đối phương) khi fromUserId !== currentUserId
+    const isIncoming = message.fromUserId?.toLowerCase() !== currentUserId?.toLowerCase();
     const isUnread = isIncoming && state.activeConversationId !== conversationId;
 
     let updatedConversations = state.conversations;
     if (isUnread) {
-      updatedConversations = state.conversations.map(c => 
+      updatedConversations = state.conversations.map(c =>
         c.conversationId === conversationId
           ? {
-              ...c,
-              isUnread: true,
-              message: message.content,
-              timeMessage: message.sendTime,
+            ...c,
+            isUnread: true,
+            message: message.content,
+            timeMessage: message.sendTime,
+            lastMessageSenderId: message.fromUserId,
+            boxChatInfo: {
+              ...c.boxChatInfo,
+              lastMessageId: message.id,
               lastMessageSenderId: message.fromUserId,
-              boxChatInfo: {
-                ...c.boxChatInfo,
-                lastMessageId: message.id,
-                lastMessageSenderId: message.fromUserId,
-                unreadCount: (c.boxChatInfo?.unreadCount ?? 0) + 1,
-              }
+              unreadCount: (c.boxChatInfo?.unreadCount ?? 0) + 1,
             }
+          }
           : c
       );
     } else {
       // Vẫn cập nhật tin nhắn cuối kể cả khi đã đọc
-      updatedConversations = state.conversations.map(c => 
+      updatedConversations = state.conversations.map(c =>
         c.conversationId === conversationId
           ? {
-              ...c,
-              message: message.content,
-              timeMessage: message.sendTime,
+            ...c,
+            message: message.content,
+            timeMessage: message.sendTime,
+            lastMessageSenderId: message.fromUserId,
+            boxChatInfo: {
+              ...c.boxChatInfo,
+              lastMessageId: message.id,
               lastMessageSenderId: message.fromUserId,
-              boxChatInfo: {
-                ...c.boxChatInfo,
-                lastMessageId: message.id,
-                lastMessageSenderId: message.fromUserId,
-              }
             }
+          }
           : c
       );
     }
@@ -261,7 +280,7 @@ export const useChatStore = create<ChatState>((set) => ({
   setUserOnlineStatus: (userId, isOnline) => set((state) => ({
     onlineUsers: {
       ...state.onlineUsers,
-      [userId]: isOnline
+      [userId.toLowerCase()]: isOnline
     }
   })),
 
@@ -293,13 +312,13 @@ export const useChatStore = create<ChatState>((set) => ({
     const existingUser = existing.find((entry) => entry.userId === userId);
     const nextUsers = existingUser
       ? existing.map((entry) => {
-          if (entry.userId !== userId) return entry;
-          return {
-            ...entry,
-            userName: userName || entry.userName,
-            updatedAt: now
-          };
-        })
+        if (entry.userId !== userId) return entry;
+        return {
+          ...entry,
+          userName: userName || entry.userName,
+          updatedAt: now
+        };
+      })
       : [...existing, { userId, userName, updatedAt: now }];
 
     return {
@@ -344,57 +363,71 @@ export const useChatStore = create<ChatState>((set) => ({
   }),
 
   setConversationUnread: (conversationId, isUnread) => set((state) => ({
-    conversations: state.conversations.map(c => 
+    conversations: state.conversations.map(c =>
       c.conversationId === conversationId
         ? {
-            ...c,
-            isUnread,
-            boxChatInfo: {
-              ...c.boxChatInfo,
-              unreadCount: isUnread ? Math.max(1, c.boxChatInfo?.unreadCount ?? 0) : 0,
-            }
+          ...c,
+          isUnread,
+          boxChatInfo: {
+            ...c.boxChatInfo,
+            unreadCount: isUnread ? Math.max(1, c.boxChatInfo?.unreadCount ?? 0) : 0,
           }
+        }
         : c
     )
   })),
 
-  markMessageAsSeen: (conversationId, messageId) => set((state) => {
+  markMessageAsSeen: (conversationId, messageId, readByUserId) => set((state) => {
     const msgs = state.messages[conversationId] || [];
-    
+    const currentUserId = useAuthStore.getState().user?.id;
+
+    // Helper: thêm userId vào readBy array (tránh duplicate, bỏ qua bản thân)
+    const addToReadBy = (msg: MessageItem, userId?: string): string[] => {
+      const existing = msg.readBy || [];
+      if (!userId || userId.toLowerCase() === currentUserId?.toLowerCase()) return existing;
+      if (existing.some(id => id.toLowerCase() === userId.toLowerCase())) return existing;
+      return [...existing, userId];
+    };
+
     // Tìm index của tin nhắn vừa được xem
     const seenIndex = msgs.findIndex(m => m.id === messageId);
+
     if (seenIndex === -1) {
-      // Vì ứng dụng dùng random UUID cho tin nhắn realtime phía client (backend không trả về messageId thật),
-      // nên khi máy tính B gửi event MessageSeen(UUID_B), máy tính A (đang lưu là UUID_A) sẽ không nhận ra.
-      // Giải pháp: Khi nhận MessageSeen nhưng ko trùng id, ta ngầm định họ đã xem tới tin nhắn cuối cùng hiện tại!
+      // Khi nhận MessageSeen nhưng ko trùng id, ngầm định họ đã xem tới tin nhắn cuối cùng
       const lastMsg = msgs[msgs.length - 1];
       const validMessageId = lastMsg?.id || messageId;
-      
-      const updatedMsgsFallback = msgs.map((m) => ({ ...m, isSeen: true }));
+
+      const updatedMsgsFallback = msgs.map((m) => ({
+        ...m,
+        isSeen: true,
+        readBy: addToReadBy(m, readByUserId),
+      }));
 
       return {
         messages: {
           ...state.messages,
           [conversationId]: updatedMsgsFallback
         },
-        conversations: state.conversations.map(c => 
+        conversations: state.conversations.map(c =>
           c.conversationId === conversationId
             ? {
-                ...c,
-                lastReadMessageId: validMessageId,
-                boxChatInfo: {
-                  ...c.boxChatInfo,
-                  opponentLastReadMessageId: validMessageId,
-                }
+              ...c,
+              lastReadMessageId: validMessageId,
+              boxChatInfo: {
+                ...c.boxChatInfo,
+                opponentLastReadMessageId: validMessageId,
               }
+            }
             : c
         )
       };
     }
 
     // Đánh dấu tất cả tin nhắn từ trước đến index này là đã xem
-    const updatedMsgs = msgs.map((m, idx) => 
-      idx <= seenIndex ? { ...m, isSeen: true } : m
+    const updatedMsgs = msgs.map((m, idx) =>
+      idx <= seenIndex
+        ? { ...m, isSeen: true, readBy: addToReadBy(m, readByUserId) }
+        : m
     );
 
     return {
@@ -402,25 +435,9 @@ export const useChatStore = create<ChatState>((set) => ({
         ...state.messages,
         [conversationId]: updatedMsgs
       },
-      conversations: state.conversations.map(c => 
+      conversations: state.conversations.map(c =>
         c.conversationId === conversationId
           ? {
-              ...c,
-              lastReadMessageId: messageId,
-              boxChatInfo: {
-                ...c.boxChatInfo,
-                opponentLastReadMessageId: messageId,
-              }
-            }
-          : c
-      )
-    };
-  }),
-
-  updateOpponentLastReadMessageId: (conversationId, messageId) => set((state) => ({
-    conversations: state.conversations.map(c => 
-      c.conversationId === conversationId
-        ? {
             ...c,
             lastReadMessageId: messageId,
             boxChatInfo: {
@@ -428,6 +445,22 @@ export const useChatStore = create<ChatState>((set) => ({
               opponentLastReadMessageId: messageId,
             }
           }
+          : c
+      )
+    };
+  }),
+
+  updateOpponentLastReadMessageId: (conversationId, messageId) => set((state) => ({
+    conversations: state.conversations.map(c =>
+      c.conversationId === conversationId
+        ? {
+          ...c,
+          lastReadMessageId: messageId,
+          boxChatInfo: {
+            ...c.boxChatInfo,
+            opponentLastReadMessageId: messageId,
+          }
+        }
         : c
     )
   })),
@@ -435,23 +468,23 @@ export const useChatStore = create<ChatState>((set) => ({
   updateMessageId: (conversationId, tempId, serverId) => set((state) => {
     const msgs = state.messages[conversationId] || [];
     const updatedMsgs = msgs.map(m => m.id === tempId ? { ...m, id: serverId } : m);
-    
+
     // Nếu lastReadMessageId đang trỏ vào tempId, cũng cập nhật nó luôn
-    const updatedConvs = state.conversations.map(c => 
+    const updatedConvs = state.conversations.map(c =>
       c.conversationId === conversationId && c.lastReadMessageId === tempId
         ? {
-            ...c,
-            lastReadMessageId: serverId,
-            boxChatInfo: {
-              ...c.boxChatInfo,
-              opponentLastReadMessageId: c.boxChatInfo?.opponentLastReadMessageId === tempId
-                ? serverId
-                : c.boxChatInfo?.opponentLastReadMessageId,
-              lastMessageId: c.boxChatInfo?.lastMessageId === tempId
-                ? serverId
-                : c.boxChatInfo?.lastMessageId,
-            }
+          ...c,
+          lastReadMessageId: serverId,
+          boxChatInfo: {
+            ...c.boxChatInfo,
+            opponentLastReadMessageId: c.boxChatInfo?.opponentLastReadMessageId === tempId
+              ? serverId
+              : c.boxChatInfo?.opponentLastReadMessageId,
+            lastMessageId: c.boxChatInfo?.lastMessageId === tempId
+              ? serverId
+              : c.boxChatInfo?.lastMessageId,
           }
+        }
         : c
     );
 
@@ -467,4 +500,141 @@ export const useChatStore = create<ChatState>((set) => ({
       [conversationId]: Date.now(),
     }
   })),
+
+  // === Group Chat Actions ===
+
+  removeConversation: (conversationId) => set((state) => {
+    const filtered = state.conversations.filter(c => c.conversationId !== conversationId);
+    const newMessages = { ...state.messages };
+    delete newMessages[conversationId];
+    return {
+      conversations: filtered,
+      messages: newMessages,
+      activeConversationId: state.activeConversationId === conversationId ? null : state.activeConversationId,
+    };
+  }),
+
+  markConversationAsRemoved: (conversationId) => set((state) => ({
+    conversations: state.conversations.map(c =>
+      c.conversationId === conversationId
+        ? { ...c, isRemovedFromGroup: true }
+        : c
+    )
+  })),
+
+  updateConversationParticipants: (conversationId, participants, memberCount) => set((state) => ({
+    conversations: state.conversations.map(c =>
+      c.conversationId === conversationId
+        ? {
+          ...c,
+          participants,
+          groupInfo: c.groupInfo ? { ...c.groupInfo, memberCount } : c.groupInfo,
+        }
+        : c
+    )
+  })),
+
+  addParticipantsToConversation: (conversationId, newMembers, memberCount) => set((state) => ({
+    conversations: state.conversations.map(c => {
+      if (c.conversationId !== conversationId) return c;
+      const existingIds = new Set(c.participants.map(p => p.id));
+      const uniqueNew = newMembers.filter(m => !existingIds.has(m.id));
+      return {
+        ...c,
+        participants: [...c.participants, ...uniqueNew],
+        groupInfo: c.groupInfo ? { ...c.groupInfo, memberCount } : c.groupInfo,
+      };
+    })
+  })),
+
+  removeParticipantFromConversation: (conversationId, userId, memberCount) => set((state) => ({
+    conversations: state.conversations.map(c => {
+      if (c.conversationId !== conversationId) return c;
+      return {
+        ...c,
+        participants: c.participants.filter(p => p.id !== userId),
+        groupInfo: c.groupInfo ? { ...c.groupInfo, memberCount } : c.groupInfo,
+      };
+    })
+  })),
+
+  updateParticipantRole: (conversationId, userId, newRole) => set((state) => ({
+    conversations: state.conversations.map(c => {
+      if (c.conversationId !== conversationId) return c;
+      return {
+        ...c,
+        participants: c.participants.map(p =>
+          p.id === userId ? { ...p, role: newRole } : p
+        ),
+      };
+    })
+  })),
+
+  addSystemMessages: (conversationId, systemMsgs) => set((state) => {
+    const existingMsgs = state.messages[conversationId] || [];
+    const fakeMessages: MessageItem[] = systemMsgs.map((content) => ({
+      id: crypto.randomUUID(),
+      content,
+      sendTime: new Date().toISOString(),
+      fromUserId: 'system',
+      messageType: 4,
+    }));
+    return {
+      messages: {
+        ...state.messages,
+        [conversationId]: [...existingMsgs, ...fakeMessages]
+      }
+    };
+  }),
+
+  // === Media Message Actions ===
+
+  updateMessageProgress: (conversationId, tempId, progress) => set((state) => {
+    const msgs = state.messages[conversationId];
+    if (!msgs) return state;
+    return {
+      messages: {
+        ...state.messages,
+        [conversationId]: msgs.map(m =>
+          m.id === tempId ? { ...m, progress } : m
+        )
+      }
+    };
+  }),
+
+  updateMessageError: (conversationId, tempId, errorMsg) => set((state) => {
+    const msgs = state.messages[conversationId];
+    if (!msgs) return state;
+    return {
+      messages: {
+        ...state.messages,
+        [conversationId]: msgs.map(m =>
+          m.id === tempId ? { ...m, isLoading: false, error: errorMsg, progress: undefined } : m
+        )
+      }
+    };
+  }),
+
+  finalizeMediaMessage: (conversationId, tempId, serverId, url, attachments) => set((state) => {
+    const msgs = state.messages[conversationId];
+    if (!msgs) return state;
+    return {
+      messages: {
+        ...state.messages,
+        [conversationId]: msgs.map(m =>
+          m.id === tempId
+            ? {
+                ...m,
+                id: serverId,
+                url,
+                attachments: attachments ?? m.attachments,
+                isLoading: false,
+                progress: 100,
+                localObjectUrl: undefined,
+              }
+            : m
+        )
+      }
+    };
+  }),
 }));

@@ -9,22 +9,31 @@ import type {
   CheckConversationResponse,
   CreateConversationResponse,
   UserProfileResponse,
-  UploadAvatarResponse
+  UploadAvatarResponse,
+  SendMediaResponse,
+  UploadMediaResponse,
+  Attachment,
+  CreateGroupResponse,
+  AddParticipantResponse,
+  KickOutResponse,
+  LeaveGroupResponse,
+  JoinGroupResponse,
+  GetMembersResponse
 } from '../types/chat';
 
 export const chatApi = {
-  // Lấy info 1 user theo ID
-  getUserProfile: (userId: string) => {
+  // Lấy info 1 user theo ID (gọi API Chat App)
+  getUserProfile: (userId: string): Promise<UserProfileResponse> => {
     return axiosInstance.get<never, UserProfileResponse>(`/user/${userId}`);
   },
 
-  // Upload avatar của user
+  // Upload avatar của user (gọi Authorization Server)
   uploadAvatar: async (file: File): Promise<UploadAvatarResponse> => {
     const formData = new FormData();
     formData.append('file', file);
 
     const accessToken = useAuthStore.getState().accessToken;
-    const response = await axios.post<{ url: string }>(`${APP_CONFIG.API_BASE_URL}/user/upload_avt`, formData, {
+    const response = await axios.post<{ url: string }>(`${APP_CONFIG.SSO_USER_PROFILE_URL}/upload-avatar`, formData, {
       withCredentials: true,
       headers: {
         ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
@@ -41,8 +50,8 @@ export const chatApi = {
     };
   },
 
-  // Lấy list user tìm kiếm
-  searchUsers: (query: string, take: number = 10) => {
+  // Lấy list user tìm kiếm (gọi API Chat App)
+  searchUsers: (query: string, take: number = 10): Promise<SearchUserResponse> => {
     return axiosInstance.get<never, SearchUserResponse>('/user/search', {
       params: { query, take }
     });
@@ -62,7 +71,7 @@ export const chatApi = {
     });
   },
 
-  // Tạo conversation mới
+  // Tạo conversation mới (1-1)
   createConversation: (fromUserId: string, toUserId: string) => {
     return axiosInstance.post<never, CreateConversationResponse>('/conversation/create', {
       fromUserId,
@@ -74,9 +83,172 @@ export const chatApi = {
 
   // Load tin nhắn theo conversation
   getMessages: (conversationId: string, pageSize: number = 20, pageNumber: number = 1) => {
-    return axiosInstance.get<never, FetchMessagesResponse>(`/conversation/${conversationId}/messages`, {
+    return axiosInstance.get<never, FetchMessagesResponse>(`/conversation/messages/${conversationId}`, {
       // Đảm bảo truyền cả camelCase lẫn PascalCase để backend nhận được Data
       params: { pageSize, PageSize: pageSize, pageNumber, PageNumber: pageNumber }
     });
+  },
+
+  // === Group Chat APIs ===
+
+  // Tạo nhóm chat mới
+  createGroup: (name: string, groupImage: string | null, memberUserIds: string[]) => {
+    return axiosInstance.post<never, CreateGroupResponse>('/conversation/create-group', {
+      name,
+      groupImage,
+      memberUserIds
+    });
+  },
+
+  // Thêm thành viên vào nhóm
+  addParticipant: (conversationId: string, userIds: string[]) => {
+    return axiosInstance.post<never, AddParticipantResponse>('/conversation/add-participant', {
+      conversationId,
+      userIds
+    });
+  },
+
+  // Kick thành viên khỏi nhóm
+  kickOutParticipant: (conversationId: string, kickedUserId: string, requestUserId: string) => {
+    return axiosInstance.post<never, KickOutResponse>('/conversation/kick-out', {
+      conversationId,
+      kickedUserId,
+      requestUserId
+    });
+  },
+
+  // Tự rời nhóm
+  leaveGroup: (conversationId: string, userId: string) => {
+    return axiosInstance.post<never, LeaveGroupResponse>('/conversation/leave', {
+      conversationId,
+      userId
+    });
+  },
+
+  // Tham gia nhóm qua link
+  joinGroupByLink: (conversationId: string, userId: string, boxChatLink: string) => {
+    return axiosInstance.post<never, JoinGroupResponse>('/conversation/join', {
+      conversationId,
+      userId,
+      boxChatLink
+    });
+  },
+
+  // Load danh sách thành viên nhóm
+  getConversationMembers: (conversationId: string) => {
+    return axiosInstance.get<never, GetMembersResponse>(`/conversation/${conversationId}/members`);
+  },
+
+  // Upload 1 file media lên server (POST /upload-media)
+  uploadMedia: async (
+    conversationId: string,
+    messageType: number,
+    file: File,
+    sendTime: string,
+    onUploadProgress?: (progress: number) => void
+  ): Promise<UploadMediaResponse> => {
+    const formData = new FormData();
+    formData.append('conversationId', conversationId);
+    formData.append('messageType', String(messageType));
+    formData.append('file', file);
+    formData.append('sendTime', sendTime);
+
+    const accessToken = useAuthStore.getState().accessToken;
+    const response = await axios.post<UploadMediaResponse>(
+      `${APP_CONFIG.API_BASE_URL}/conversation/messages/upload-media`,
+      formData,
+      {
+        withCredentials: true,
+        headers: {
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          'Content-Type': 'multipart/form-data',
+        },
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total && onUploadProgress) {
+            const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            onUploadProgress(Math.min(percent, 95));
+          }
+        },
+      }
+    );
+
+    return response.data;
+  },
+
+  // Tạo tin nhắn media từ attachments đã upload (POST /send-media)
+  sendMedia: async (
+    conversationId: string,
+    messageType: number,
+    fromUserId: string,
+    sendTime: string,
+    attachments: Attachment[],
+    batchId?: string,
+    batchOrder?: number
+  ): Promise<SendMediaResponse> => {
+    const accessToken = useAuthStore.getState().accessToken;
+    const response = await axios.post<SendMediaResponse>(
+      `${APP_CONFIG.API_BASE_URL}/conversation/messages/send-media`,
+      {
+        conversationId,
+        messageType,
+        sendTime,
+        fromUserId,
+        batchId,
+        batchOrder,
+        attachments: attachments.map(a => ({
+          fileName: a.fileName,
+          fileSize: a.fileSize,
+          url: a.url,
+        })),
+      },
+      {
+        withCredentials: true,
+        headers: {
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    return response.data;
+  },
+
+  /** @deprecated Dùng uploadMedia + sendMedia thay thế */
+  sendMediaMessage: async (
+    conversationId: string,
+    messageType: number,
+    file: File,
+    content: string | null,
+    onUploadProgress?: (progress: number) => void
+  ): Promise<SendMediaResponse> => {
+    const formData = new FormData();
+    formData.append('conversationId', conversationId);
+    formData.append('messageType', String(messageType));
+    formData.append('file', file);
+    if (content) {
+      formData.append('content', content);
+    }
+    formData.append('sendTime', new Date().toISOString());
+
+    const accessToken = useAuthStore.getState().accessToken;
+    const response = await axios.post<SendMediaResponse>(
+      `${APP_CONFIG.API_BASE_URL}/conversation/messages/send-media`,
+      formData,
+      {
+        withCredentials: true,
+        headers: {
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          'Content-Type': 'multipart/form-data',
+        },
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total && onUploadProgress) {
+            const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            onUploadProgress(Math.min(percent, 95));
+          }
+        },
+      }
+    );
+
+    return response.data;
   }
 };

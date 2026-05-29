@@ -234,8 +234,7 @@ export default function ProfileOverlay({ onClose }: ProfileOverlayProps) {
         ...user,
         urlAvatar: uploadedUrl,
       },
-        accessToken,
-        useAuthStore.getState().sessionId || ''
+        accessToken
       );
 
       if (previewUrl) {

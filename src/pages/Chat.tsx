@@ -11,7 +11,7 @@ export default function Chat() {
   const { activeConversationId } = useChatStore();
 
   // Khởi tạo SignalR
-  const { isConnected, sendMessage, sendTyping, stopTyping, markAsRead } = useChatHub();
+  const { isConnected, sendMessage, sendTyping, stopTyping, markAsRead, leaveConversation } = useChatHub();
 
   if (!hasHydrated || !user) return null;
 
@@ -30,6 +30,7 @@ export default function Chat() {
             sendTyping={sendTyping}
             stopTypingSignal={stopTyping}
             markAsRead={markAsRead}
+            leaveConversation={leaveConversation}
             isConnected={isConnected}
           />
         ) : (

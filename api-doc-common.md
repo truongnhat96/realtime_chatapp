@@ -12,19 +12,13 @@ Tài liệu được thiết kế theo chuẩn RESTful API documentation để F
 
 ---
 
-## 1. Authentication (Xác thực)
-  đọc kỹ [api-doc-authenticate.md](api-doc-authenticate.md)
-
-## 2. Conversation (Hộp thoại trò chuyện)
+## 1. Conversation (Hộp thoại trò chuyện)
   đọc kỹ [api-doc-conversation.md](api-doc-conversation.md)
 
-## 3. Message (Tin nhắn)
+## 2. Message (Tin nhắn)
   đọc kỹ [api-doc-message.md](api-doc-message.md)
 
-## 4. User (Người dùng)
-  đọc kỹ [api-doc-user.md](api-doc-user.md)
-
-## 5. SignalR (Real-time Chat)
+## 4. SignalR (Real-time Chat)
   đọc kỹ [api-doc-hub.md](api-doc-hub.md)
 
 ### 🌟 Cấu trúc Response chung (Global Response Wrapper)

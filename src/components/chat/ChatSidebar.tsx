@@ -2,18 +2,23 @@ import { useState, useRef, useEffect } from 'react';
 import { useAuthStore } from '../../stores/authStore';
 import { useAuth } from '../../hooks/useAuth.ts';
 import { useThemeStore } from '../../stores/themeStore';
-import { Search, Moon, Sun, LogOut } from 'lucide-react';
+import { useChatStore } from '../../stores/chatStore';
+import { Search, Moon, Sun, LogOut, UsersRound, Settings } from 'lucide-react';
+import { APP_CONFIG } from '../../lib/constants';
 import ConversationList from './ConversationList.tsx';
 import SearchOverlay from './SearchOverlay.tsx';
 import ProfileOverlay from './ProfileOverlay.tsx';
+import CreateGroupModal from './CreateGroupModal.tsx';
 
 export default function ChatSidebar() {
   const { user } = useAuthStore();
   const { signOut } = useAuth();
   const { isDark, toggleTheme } = useThemeStore();
+  const openConversation = useChatStore(state => state.openConversation);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchActive, setIsSearchActive] = useState(false);
   const [isProfileActive, setIsProfileActive] = useState(false);
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
 
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
@@ -29,6 +34,11 @@ export default function ChatSidebar() {
       document.removeEventListener("mousedown", handleClickOutside);
     };
   }, []);
+
+  const handleGroupCreated = (conversationId: string) => {
+    openConversation(conversationId);
+    setShowCreateGroup(false);
+  };
 
   return (
     <div className="relative flex flex-col h-full bg-white dark:bg-[#1E1E1E] transition-colors duration-200" ref={searchContainerRef}>
@@ -57,6 +67,20 @@ export default function ChatSidebar() {
         </div>
 
         <div className="flex gap-2 text-gray-500 dark:text-gray-400">
+          <button
+            onClick={() => setShowCreateGroup(true)}
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"
+            title="Tạo nhóm"
+          >
+            <UsersRound size={20} />
+          </button>
+          <button
+            onClick={() => window.location.href = `${APP_CONFIG.SSO_BASE_URL}/Account/Manage`}
+            className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"
+            title="Cài đặt tài khoản"
+          >
+            <Settings size={20} />
+          </button>
           <button onClick={toggleTheme} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors">
             {isDark ? <Sun size={20} /> : <Moon size={20} />}
           </button>
@@ -103,6 +127,14 @@ export default function ChatSidebar() {
           </div>
         )}
       </div>
+
+      {/* Create Group Modal */}
+      {showCreateGroup && (
+        <CreateGroupModal
+          onClose={() => setShowCreateGroup(false)}
+          onGroupCreated={handleGroupCreated}
+        />
+      )}
     </div>
   );
 }

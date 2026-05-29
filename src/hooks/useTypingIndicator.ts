@@ -95,7 +95,7 @@ export const useTypingIndicator = ({
 
   useEffect(() => {
     const prevTarget = activeTargetRef.current;
-    const hasChanged = prevTarget.conversationId !== conversationId || prevTarget.toUserId !== toUserId;
+    const hasChanged = prevTarget.conversationId !== conversationId || prevTarget.toUserId?.toLowerCase() !== toUserId?.toLowerCase();
 
     if (hasChanged && isTypingSentRef.current && prevTarget.conversationId && prevTarget.toUserId) {
       void stopTypingInternal(prevTarget.conversationId, prevTarget.toUserId);
@@ -132,7 +132,7 @@ export const useTypingIndicator = ({
   const visibleTypingUsers = useMemo(() => {
     const now = Date.now();
     return typingUsers.filter((entry) => {
-      if (entry.userId === currentUserId) return false;
+      if (entry.userId?.toLowerCase() === currentUserId?.toLowerCase()) return false;
       return now - entry.updatedAt <= STALE_TYPING_MAX_AGE_MS;
     });
   }, [typingUsers, currentUserId]);

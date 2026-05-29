@@ -4,6 +4,16 @@ import { APP_CONFIG } from '../lib/constants';
 import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
 import { useToastStore } from '../stores/toastStore';
+import type {
+  GroupCreatedEvent,
+  AddedToGroupEvent,
+  MemberAddedEvent,
+  MemberJoinedEvent,
+  RemovedFromGroupEvent,
+  MemberRemovedEvent,
+  MemberLeftEvent,
+  SignalRMediaMessageReceive,
+} from '../types/chat';
 
 const useChatHub = () => {
   const [isConnected, setIsConnected] = useState(false);
@@ -16,17 +26,27 @@ const useChatHub = () => {
   }>>([]);
 
   const accessToken = useAuthStore(state => state.accessToken);
+  const expiresAt = useAuthStore(state => state.expiresAt);
   const hasHydrated = useAuthStore(state => state.hasHydrated);
   useEffect(() => {
-    if (!hasHydrated || !accessToken) return;
+    if (!hasHydrated || !accessToken || (expiresAt && expiresAt < Date.now())) return;
 
     const previousConnection = connectionRef.current;
     if (previousConnection) {
       previousConnection.off('ReceiveMessage');
+      previousConnection.off('ReceiveMediaMessage');
       previousConnection.off('UserOnline');
       previousConnection.off('UserOffline');
       previousConnection.off('UserTyping');
       previousConnection.off('UserStopTyping');
+      previousConnection.off('MessageSeen');
+      previousConnection.off('GroupCreated');
+      previousConnection.off('AddedToGroup');
+      previousConnection.off('MemberAdded');
+      previousConnection.off('MemberJoined');
+      previousConnection.off('RemovedFromGroup');
+      previousConnection.off('MemberRemoved');
+      previousConnection.off('MemberLeft');
       if (previousConnection.state !== 'Disconnected') {
         previousConnection.stop().catch(() => undefined);
       }
@@ -43,12 +63,16 @@ const useChatHub = () => {
 
     connectionRef.current = connection;
 
-    const onReceiveMessage = async (msg: any) => {
-      const serverMessageId = msg.id || msg.Id || msg.messageId || msg.MessageId;
-      const conversationId = msg.conversationId || msg.ConversationId;
-      const msgContent = msg.content || msg.Content;
-      const msgSendTime = msg.sendTime || msg.SendTime;
-      const msgFromUserId = msg.fromUserId || msg.FromUserId;
+    const onReceiveMessage = async (msg: Record<string, unknown>) => {
+      const serverMessageId = (msg.id || msg.Id || msg.messageId || msg.MessageId) as string | undefined;
+      const conversationId = (msg.conversationId || msg.ConversationId) as string | undefined;
+      const msgContent = (msg.content || msg.Content) as string | undefined;
+      const msgSendTime = (msg.sendTime || msg.SendTime) as string | undefined;
+      const msgFromUserId = (msg.fromUserId || msg.FromUserId) as string | undefined;
+      const msgSenderName = (msg.senderName || msg.SenderName) as string | undefined;
+      const msgSenderAvatar = (msg.senderAvatar || msg.SenderAvatar) as string | undefined;
+      const msgMessageType = (msg.messageType ?? msg.MessageType ?? 0) as number;
+      const msgConversationType = (msg.conversationType ?? msg.ConversationType) as number | undefined;
       const currentUserId = useAuthStore.getState().user?.id;
       const activeConversationId = useChatStore.getState().activeConversationId;
 
@@ -56,7 +80,7 @@ const useChatHub = () => {
         return;
       }
 
-      if (currentUserId && msgFromUserId === currentUserId) {
+      if (currentUserId && msgFromUserId?.toLowerCase() === currentUserId.toLowerCase()) {
         const pendingIndex = pendingSelfMessagesRef.current.findIndex((item) => {
           return (
             item.conversationId === conversationId &&
@@ -80,10 +104,13 @@ const useChatHub = () => {
       useChatStore.getState().addMessage(conversationId, {
         id: serverMessageId,
         content: msgContent,
-        sendTime: msgSendTime,
-        fromUserId: msgFromUserId
+        sendTime: msgSendTime || '',
+        fromUserId: msgFromUserId,
+        senderName: msgSenderName,
+        senderAvatar: msgSenderAvatar,
+        messageType: msgMessageType,
       });
-      
+
       if (msgFromUserId) {
         useChatStore.getState().setUserTyping(conversationId, msgFromUserId, false);
       }
@@ -91,11 +118,15 @@ const useChatHub = () => {
       const currentConversations = useChatStore.getState().conversations;
       const conversationExists = currentConversations.some(c => c.conversationId === conversationId);
 
-      let senderName = "";
-      let senderAvatar = "";
-      let senderIsOnline = useChatStore.getState().onlineUsers[msgFromUserId] ?? false;
+      let senderName = msgSenderName || "";
+      let senderAvatar = msgSenderAvatar || "";
+      let senderIsOnline = msgFromUserId ? (useChatStore.getState().onlineUsers[msgFromUserId.toLowerCase()] ?? false) : false;
 
       if (!conversationExists) {
+        // Nếu là group (conversationType = 1) nhưng chưa có conversation thì bỏ qua
+        // vì cần event GroupCreated/AddedToGroup để khởi tạo conversation đầy đủ.
+        if (msgConversationType === 1) return;
+
         try {
           const { chatApi } = await import('../lib/api');
           const profileRes = await chatApi.getUserProfile(msgFromUserId);
@@ -105,10 +136,13 @@ const useChatHub = () => {
             senderIsOnline = profileRes.data.isOnline ?? senderIsOnline;
             useChatStore.getState().addConversation({
               conversationId,
+              type: 0,
               user: profileRes.data,
+              participants: [],
               message: msgContent,
-              seenMessage: msgSendTime,
-              timeMessage: msgSendTime,
+              messageType: msgMessageType,
+              seenMessage: msgSendTime || '',
+              timeMessage: msgSendTime || '',
               boxChatInfo: {
                 lastMessageId: serverMessageId,
                 lastMessageSenderId: msgFromUserId,
@@ -125,14 +159,18 @@ const useChatHub = () => {
       } else {
         const conv = currentConversations.find(c => c.conversationId === conversationId);
         if (conv) {
-          senderName = conv.user.name || conv.user.userName || "Người dùng";
-          senderAvatar = conv.user.urlAvatar || "";
-          senderIsOnline = useChatStore.getState().onlineUsers[msgFromUserId] ?? conv.user.isOnline ?? false;
+          if (conv.type === 0 && conv.user) {
+            senderName = senderName || conv.user.name || conv.user.userName || "Người dùng";
+            senderAvatar = senderAvatar || conv.user.urlAvatar || "";
+            senderIsOnline = useChatStore.getState().onlineUsers[msgFromUserId] ?? conv.user.isOnline ?? false;
+          } else {
+            senderName = senderName || "Thành viên nhóm";
+          }
         }
-        useChatStore.getState().updateConversationLastMessage(conversationId, msgContent, msgSendTime, msgFromUserId);
+        useChatStore.getState().updateConversationLastMessage(conversationId, msgContent, msgSendTime || '', msgFromUserId);
       }
 
-      if (msgFromUserId && msgFromUserId !== currentUserId) {
+      if (msgFromUserId && msgFromUserId.toLowerCase() !== currentUserId?.toLowerCase()) {
         const shouldNotify = !activeConversationId || activeConversationId !== conversationId;
         if (shouldNotify) {
           useToastStore.getState().addChatToast({
@@ -140,7 +178,7 @@ const useChatHub = () => {
             userName: senderName,
             userAvatar: senderAvatar,
             message: msgContent,
-            time: msgSendTime,
+            time: msgSendTime || '',
             isOnline: senderIsOnline
           });
         }
@@ -155,41 +193,204 @@ const useChatHub = () => {
       useChatStore.getState().setUserOnlineStatus(userId, false);
     };
 
-    const onUserTyping = (payload: any) => {
-      const conversationId = payload?.conversationId || payload?.ConversationId || payload?.id || payload?.Id;
-      const userId = payload?.userId || payload?.UserId || payload?.fromUserId || payload?.FromUserId || payload;
-      const userName = payload?.userName || payload?.UserName || payload?.name || payload?.Name;
+    const onUserTyping = (payload: Record<string, unknown>) => {
+      const conversationId = (payload?.conversationId || payload?.ConversationId || payload?.id || payload?.Id) as string | undefined;
+      const userId = (payload?.userId || payload?.UserId || payload?.fromUserId || payload?.FromUserId) as string | undefined;
+      const userName = (payload?.userName || payload?.UserName || payload?.name || payload?.Name) as string | undefined;
       const currentUserId = useAuthStore.getState().user?.id;
 
-      if (!conversationId || !userId || userId === currentUserId) {
+      if (!conversationId || !userId || userId.toLowerCase() === currentUserId?.toLowerCase()) {
         return;
       }
 
       useChatStore.getState().setUserTyping(conversationId, userId, true, userName);
     };
 
-    const onUserStopTyping = (payload: any) => {
-      const conversationId = payload?.conversationId || payload?.ConversationId || payload?.id || payload?.Id;
-      const userId = payload?.userId || payload?.UserId || payload?.fromUserId || payload?.FromUserId || payload;
+    const onUserStopTyping = (payload: Record<string, unknown>) => {
+      const conversationId = (payload?.conversationId || payload?.ConversationId || payload?.id || payload?.Id) as string | undefined;
+      const userId = (payload?.userId || payload?.UserId || payload?.fromUserId || payload?.FromUserId) as string | undefined;
       const currentUserId = useAuthStore.getState().user?.id;
 
-      if (!conversationId || !userId || userId === currentUserId) {
+      if (!conversationId || !userId || userId.toLowerCase() === currentUserId?.toLowerCase()) {
         return;
       }
 
       useChatStore.getState().setUserTyping(conversationId, userId, false);
     };
 
-    const onMessageSeen = (data: any) => {
-      const conversationId = data.conversationId || data.ConversationId;
-      const messageId = data.messageId || data.MessageId;
+    const onMessageSeen = (data: Record<string, unknown>) => {
+      const conversationId = (data.conversationId || data.ConversationId) as string | undefined;
+      const messageId = (data.messageId || data.MessageId) as string | undefined;
+      const readByUserId = (data.readByUserId || data.ReadByUserId) as string | undefined;
       if (conversationId && messageId) {
-        useChatStore.getState().markMessageAsSeen(conversationId, messageId);
+        useChatStore.getState().markMessageAsSeen(conversationId, messageId, readByUserId);
+      }
+    };
+
+    // === Group Chat Events ===
+
+    const onGroupCreated = (data: GroupCreatedEvent) => {
+      const store = useChatStore.getState();
+      if (store.conversations.some(c => c.conversationId === data.conversationId)) return;
+
+      store.addConversation({
+        conversationId: data.conversationId,
+        type: 1,
+        user: null,
+        participants: data.participants || [],
+        groupInfo: data.groupInfo,
+        message: data.systemMessages?.[0] || '',
+        messageType: 4,
+        seenMessage: '',
+        timeMessage: new Date().toISOString(),
+        boxChatInfo: { unreadCount: 1 },
+      });
+
+      if (data.systemMessages?.length) {
+        store.addSystemMessages(data.conversationId, data.systemMessages);
+      }
+
+      // Tự Join SignalR group
+      void connection.invoke('JoinConversation', data.conversationId).catch(console.error);
+    };
+
+    const onAddedToGroup = (data: AddedToGroupEvent) => {
+      const store = useChatStore.getState();
+      if (store.conversations.some(c => c.conversationId === data.conversationId)) return;
+
+      store.addConversation({
+        conversationId: data.conversationId,
+        type: 1,
+        user: null,
+        participants: data.participants || [],
+        groupInfo: data.groupInfo,
+        message: data.systemMessages?.[0] || '',
+        messageType: 4,
+        seenMessage: '',
+        timeMessage: new Date().toISOString(),
+        boxChatInfo: { unreadCount: 1 },
+      });
+
+      if (data.systemMessages?.length) {
+        store.addSystemMessages(data.conversationId, data.systemMessages);
+      }
+
+      void connection.invoke('JoinConversation', data.conversationId).catch(console.error);
+    };
+
+    const onMemberAdded = (data: MemberAddedEvent) => {
+      const store = useChatStore.getState();
+      if (data.newMembers?.length) {
+        store.addParticipantsToConversation(data.conversationId, data.newMembers, data.memberCount);
+      }
+      if (data.systemMessages?.length) {
+        store.addSystemMessages(data.conversationId, data.systemMessages);
+      }
+    };
+
+    const onMemberJoined = (data: MemberJoinedEvent) => {
+      const store = useChatStore.getState();
+      if (data.joinedMember) {
+        store.addParticipantsToConversation(data.conversationId, [data.joinedMember], data.memberCount);
+      }
+      if (data.systemMessages?.length) {
+        store.addSystemMessages(data.conversationId, data.systemMessages);
+      }
+    };
+
+    const onRemovedFromGroup = (data: RemovedFromGroupEvent) => {
+      const store = useChatStore.getState();
+      // Đánh dấu conversation là bị xóa (không xóa hẳn để user vẫn thấy đoạn chat)
+      store.markConversationAsRemoved(data.conversationId);
+      // Thêm system message tạm thời
+      store.addSystemMessages(data.conversationId, ['Bạn đã bị xóa khỏi nhóm']);
+      // Rời SignalR group
+      void connection.invoke('LeaveConversation', data.conversationId).catch(console.error);
+    };
+
+    const onMemberRemoved = (data: MemberRemovedEvent) => {
+      const store = useChatStore.getState();
+      store.removeParticipantFromConversation(data.conversationId, data.removedUserId, data.memberCount);
+      if (data.systemMessages?.length) {
+        store.addSystemMessages(data.conversationId, data.systemMessages);
+      }
+    };
+
+    const onMemberLeft = (data: MemberLeftEvent) => {
+      const store = useChatStore.getState();
+      store.removeParticipantFromConversation(data.conversationId, data.leftUserId, data.memberCount);
+
+      // Chuyển quyền Owner nếu có
+      if (data.newOwnerId) {
+        store.updateParticipantRole(data.conversationId, data.newOwnerId, 2);
+      }
+
+      if (data.systemMessages?.length) {
+        store.addSystemMessages(data.conversationId, data.systemMessages);
+      }
+    };
+
+    // === ReceiveMediaMessage ===
+    const onReceiveMediaMessage = (msg: SignalRMediaMessageReceive) => {
+      const currentUserId = useAuthStore.getState().user?.id;
+      const conversationId = msg.conversationId;
+
+      if (!conversationId || !msg.id || !msg.fromUserId) return;
+
+      // Tin nhắn media từ chính mình → bỏ qua vì client đã tự tạo tin nhắn tạm
+      // và sẽ finalize qua mediaMessageId từ API response
+      if (msg.fromUserId?.toLowerCase() === currentUserId?.toLowerCase()) return;
+
+      // Tạo attachments array: ưu tiên mảng từ server, fallback single-file fields
+      const attachments = msg.attachments && msg.attachments.length > 0
+        ? msg.attachments
+        : (msg.url ? [{ fileName: msg.fileName || '', fileSize: msg.fileSize || 0, url: msg.url }] : []);
+
+      // Tin nhắn media từ người khác → thêm vào store
+      useChatStore.getState().addMessage(conversationId, {
+        id: msg.id,
+        content: msg.content || '',
+        sendTime: msg.sendTime || '',
+        fromUserId: msg.fromUserId,
+        senderName: msg.senderName,
+        senderAvatar: msg.senderAvatar,
+        messageType: msg.messageType,
+        attachments,
+        url: attachments[0]?.url || msg.url,
+        fileName: attachments[0]?.fileName || msg.fileName,
+        fileSize: attachments[0]?.fileSize || msg.fileSize,
+      });
+
+      // Cập nhật conversation preview
+      const previewText = msg.messageType === 1
+        ? (attachments.length > 1 ? `[${attachments.length} Hình ảnh]` : '[Hình ảnh]')
+        : msg.messageType === 2 ? '[Video]'
+          : `[File] ${attachments[0]?.fileName || msg.fileName}`;
+      useChatStore.getState().updateConversationLastMessage(
+        conversationId, previewText, msg.sendTime || '', msg.fromUserId
+      );
+
+      // Toast cho tin nhắn media nếu không đang mở conversation
+      const activeConversationId = useChatStore.getState().activeConversationId;
+      if (activeConversationId !== conversationId) {
+        const conv = useChatStore.getState().conversations.find(c => c.conversationId === conversationId);
+        const senderName = msg.senderName || conv?.user?.name || 'Người dùng';
+        const senderAvatar = msg.senderAvatar || conv?.user?.urlAvatar || '';
+        const senderIsOnline = msg.fromUserId ? (useChatStore.getState().onlineUsers[msg.fromUserId.toLowerCase()] ?? false) : false;
+        useToastStore.getState().addChatToast({
+          conversationId,
+          userName: senderName,
+          userAvatar: senderAvatar,
+          message: previewText,
+          time: msg.sendTime || '',
+          isOnline: senderIsOnline,
+        });
       }
     };
 
     // Lắng nghe có tin nhắn mới
     connection.on("ReceiveMessage", onReceiveMessage);
+    connection.on("ReceiveMediaMessage", onReceiveMediaMessage);
 
     // Lắng nghe trạng thái Online/Offline
     connection.on("UserOnline", onUserOnline);
@@ -202,6 +403,15 @@ const useChatHub = () => {
 
     connection.on("MessageSeen", onMessageSeen);
 
+    // Group events
+    connection.on("GroupCreated", onGroupCreated);
+    connection.on("AddedToGroup", onAddedToGroup);
+    connection.on("MemberAdded", onMemberAdded);
+    connection.on("MemberJoined", onMemberJoined);
+    connection.on("RemovedFromGroup", onRemovedFromGroup);
+    connection.on("MemberRemoved", onMemberRemoved);
+    connection.on("MemberLeft", onMemberLeft);
+
     let isMounted = true;
     let startTimer: ReturnType<typeof setTimeout>;
 
@@ -211,8 +421,9 @@ const useChatHub = () => {
         if (isMounted) {
           setIsConnected(true);
         }
-      } catch (error: any) {
-        if (!isMounted || (error?.message && error.message.includes('stopped during negotiation'))) {
+      } catch (error: unknown) {
+        const err = error as { message?: string };
+        if (!isMounted || (err?.message && err.message.includes('stopped during negotiation'))) {
           return;
         }
         console.error("SignalR Connection Error: ", error);
@@ -251,29 +462,39 @@ const useChatHub = () => {
       isMounted = false;
       clearTimeout(startTimer);
       connection.off('ReceiveMessage', onReceiveMessage);
+      connection.off('ReceiveMediaMessage', onReceiveMediaMessage);
       connection.off('UserOnline', onUserOnline);
       connection.off('UserOffline', onUserOffline);
       connection.off('UserTyping', onUserTyping);
       connection.off('UserStopTyping', onUserStopTyping);
       connection.off('MessageSeen', onMessageSeen);
+      connection.off('GroupCreated', onGroupCreated);
+      connection.off('AddedToGroup', onAddedToGroup);
+      connection.off('MemberAdded', onMemberAdded);
+      connection.off('MemberJoined', onMemberJoined);
+      connection.off('RemovedFromGroup', onRemovedFromGroup);
+      connection.off('MemberRemoved', onMemberRemoved);
+      connection.off('MemberLeft', onMemberLeft);
       if (connection.state !== 'Disconnected') {
         connection.stop().then(() => {
           setIsConnected(false);
         }).catch(() => undefined);
       }
     };
-  }, [hasHydrated, accessToken]);
+  }, [hasHydrated, accessToken, expiresAt]);
 
   const sendMessage = useCallback(async (conversationId: string, content: string, toUserId: string) => {
     if (connectionRef.current && isConnected) {
       const payload = {
         conversationId,
         content,
+        messageType: 0,
         sendTime: new Date().toISOString(),
         toUserId,
         // Thêm PascalCase để đối phó với model binding backend nếu nó bị strict
         ConversationId: conversationId,
         Content: content,
+        MessageType: 0,
         SendTime: new Date().toISOString(),
         ToUserId: toUserId
       };
@@ -299,7 +520,8 @@ const useChatHub = () => {
             id: tempId,
             content,
             sendTime: payload.sendTime,
-            fromUserId: currentUserId
+            fromUserId: currentUserId,
+            messageType: 0,
           });
           useChatStore.getState().updateConversationLastMessage(conversationId, content, payload.sendTime, currentUserId);
         }
@@ -348,29 +570,41 @@ const useChatHub = () => {
     }
   }, [isConnected]);
 
-  const markAsRead = useCallback(async (messageId: string, conversationId: string, senderUserId: string, isRead: boolean) => {
+  const markAsRead = useCallback(async (conversationId: string, messageId: string) => {
     if (!connectionRef.current || !isConnected) return;
 
+    const payload = {
+      conversationId,
+      messageId,
+      ConversationId: conversationId,
+      MessageId: messageId
+    };
 
     try {
-      const payload = {
-        messageId,
-        conversationId,
-        senderUserId,
-        isRead,
-        MessageId: messageId,
-        ConversationId: conversationId,
-        SenderUserId: senderUserId,
-        IsRead: isRead
-      };
       await connectionRef.current.invoke("MarkMessageAsRead", payload);
 
-      // Chỉ khi trước đó là trạng thái chưa đọc thì mới clear cờ unread local.
-      if (!isRead) {
-        useChatStore.getState().setConversationUnread(conversationId, false);
-      }
+      // Luôn clear cờ unread local sau khi invoke thành công
+      useChatStore.getState().setConversationUnread(conversationId, false);
     } catch (error) {
       console.error("Error marking message as read: ", error);
+    }
+  }, [isConnected]);
+
+  const joinConversation = useCallback(async (conversationId: string) => {
+    if (!connectionRef.current || !isConnected) return;
+    try {
+      await connectionRef.current.invoke('JoinConversation', conversationId);
+    } catch (error) {
+      console.error('Error joining conversation: ', error);
+    }
+  }, [isConnected]);
+
+  const leaveConversation = useCallback(async (conversationId: string) => {
+    if (!connectionRef.current || !isConnected) return;
+    try {
+      await connectionRef.current.invoke('LeaveConversation', conversationId);
+    } catch (error) {
+      console.error('Error leaving conversation: ', error);
     }
   }, [isConnected]);
 
@@ -379,7 +613,9 @@ const useChatHub = () => {
     sendMessage,
     sendTyping,
     stopTyping,
-    markAsRead
+    markAsRead,
+    joinConversation,
+    leaveConversation
   };
 };
 

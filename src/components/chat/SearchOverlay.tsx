@@ -16,7 +16,7 @@ export default function SearchOverlay({ query, onClose }: Props) {
   const [results, setResults] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const cacheRef = useRef<Record<string, User[]>>({});
-  
+
   const currentUserId = useAuthStore(state => state.user?.id);
   const { setActiveConversationId, addConversation } = useChatStore();
 
@@ -58,50 +58,28 @@ export default function SearchOverlay({ query, onClose }: Props) {
     if (!currentUserId) return;
     try {
       setIsLoading(true);
-      // Check if conversation exists
-      const checkRes = await chatApi.checkConversation(currentUserId, targetUser.id);
-      if (checkRes.isSuccess) {
-        if (checkRes.data.hasConversation && checkRes.data.conversationId) {
-           // Create stub if it exists but it was somehow not loaded in original list
-           addConversation({
-             conversationId: checkRes.data.conversationId,
-             user: targetUser,
-             message: '',
-             seenMessage: new Date().toISOString(),
-             timeMessage: new Date().toISOString(),
-             boxChatInfo: {
-               lastMessageId: '',
-               lastMessageSenderId: '',
-               opponentLastReadMessageId: '',
-               unreadCount: 0,
-             },
-             lastMessageSenderId: '' // Legacy compatibility
-           });
-           setActiveConversationId(checkRes.data.conversationId);
-           onClose();
-        } else {
-           // Tạo mới conversation
-           const createRes = await chatApi.createConversation(currentUserId, targetUser.id);
-           if (createRes.isSuccess && createRes.data) {
-             const newId = createRes.data;
-             addConversation({
-               conversationId: newId,
-               user: targetUser,
-               message: '',
-               seenMessage: new Date().toISOString(),
-               timeMessage: new Date().toISOString(),
-               boxChatInfo: {
-                 lastMessageId: '',
-                 lastMessageSenderId: '',
-                 opponentLastReadMessageId: '',
-                 unreadCount: 0,
-               },
-               lastMessageSenderId: '' // Legacy compatibility
-             });
-             setActiveConversationId(newId);
-             onClose();
-           }
-        }
+      const createRes = await chatApi.createConversation(currentUserId, targetUser.id);
+      if (createRes.isSuccess && createRes.data) {
+        const newId = createRes.data;
+        addConversation({
+          conversationId: newId,
+          type: 0,
+          user: targetUser,
+          participants: [],
+          message: '',
+          messageType: 0,
+          seenMessage: new Date().toISOString(),
+          timeMessage: new Date().toISOString(),
+          boxChatInfo: {
+            lastMessageId: '',
+            lastMessageSenderId: '',
+            opponentLastReadMessageId: '',
+            unreadCount: 0,
+          },
+          lastMessageSenderId: '' // Legacy compatibility
+        });
+        setActiveConversationId(newId);
+        onClose();
       }
     } catch (error) {
       console.error("Failed to select/create conversation", error);
@@ -122,16 +100,16 @@ export default function SearchOverlay({ query, onClose }: Props) {
         <p className="text-gray-500 text-sm text-center mt-4">Không tìm thấy người dùng nào</p>
       )}
       {!isLoading && results.map(user => (
-        <div 
-          key={user.id} 
+        <div
+          key={user.id}
           onClick={() => handleSelectUser(user)}
           className="flex items-center gap-3 p-3 hover:bg-gray-100 dark:hover:bg-[#2C2C2C] rounded-xl cursor-pointer transition-colors"
         >
           <div className="relative">
-             <img src={user.urlAvatar || '/default-avatar.png'} alt={user.name} className="w-12 h-12 rounded-full object-cover bg-gray-200" />
-             {user.isOnline && (
-               <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-white dark:border-[#1E1E1E] rounded-full"></div>
-             )}
+            <img src={user.urlAvatar || '/default-avatar.png'} alt={user.name} className="w-12 h-12 rounded-full object-cover bg-gray-200" />
+            {user.isOnline && (
+              <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-white dark:border-[#1E1E1E] rounded-full"></div>
+            )}
           </div>
           <div>
             <h4 className="text-gray-900 dark:text-white font-medium">{user.name}</h4>

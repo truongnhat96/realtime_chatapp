@@ -5,6 +5,17 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>chatapp-client</title>
+    <script>
+      (function() {
+        if (window.location.pathname === '/logout-callback') {
+          const loginUrl = sessionStorage.getItem('post_logout_login_url');
+          if (loginUrl) {
+            sessionStorage.removeItem('post_logout_login_url');
+            window.location.href = loginUrl;
+          }
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
