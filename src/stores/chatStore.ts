@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { ConversationItem, MessageItem, ParticipantInfo } from '../types/chat';
 import { useAuthStore } from './authStore';
+import { convertUtcToLocal } from '../lib/utils';
 
 const normalizeId = (value?: string) => {
   const trimmed = value?.trim();
@@ -74,30 +75,41 @@ export const useChatStore = create<ChatState>((set) => ({
   setConversations: (incomingConversations) => set((state) => {
     const previousById = new Map(state.conversations.map((conv) => [conv.conversationId, conv]));
     const conversations = incomingConversations.map((conv) => {
-      const previous = previousById.get(conv.conversationId);
+      const normalizedConv = {
+        ...conv,
+        timeMessage: convertUtcToLocal(conv.timeMessage),
+        seenMessage: convertUtcToLocal(conv.seenMessage),
+        participants: conv.participants.map(p => ({
+          ...p,
+          joinedAt: p.joinedAt ? convertUtcToLocal(p.joinedAt) : p.joinedAt,
+          lastReadAt: p.lastReadAt ? convertUtcToLocal(p.lastReadAt) : p.lastReadAt,
+        }))
+      };
+
+      const previous = previousById.get(normalizedConv.conversationId);
       const previousBox = previous?.boxChatInfo;
-      const incomingBox = conv.boxChatInfo;
-      const inferredUnreadCount = isUnreadBySeenMessage(conv.seenMessage) ? 1 : 0;
-      const unreadCount = incomingBox?.unreadCount ?? previousBox?.unreadCount ?? (conv.isUnread ? 1 : inferredUnreadCount);
+      const incomingBox = normalizedConv.boxChatInfo;
+      const inferredUnreadCount = isUnreadBySeenMessage(normalizedConv.seenMessage) ? 1 : 0;
+      const unreadCount = incomingBox?.unreadCount ?? previousBox?.unreadCount ?? (normalizedConv.isUnread ? 1 : inferredUnreadCount);
 
       return {
-        ...conv,
+        ...normalizedConv,
         boxChatInfo: {
           lastMessageId: normalizeId(incomingBox?.lastMessageId) || normalizeId(previousBox?.lastMessageId),
           lastMessageSenderId:
             normalizeId(incomingBox?.lastMessageSenderId) ||
-            normalizeId(conv.lastMessageSenderId) ||
+            normalizeId(normalizedConv.lastMessageSenderId) ||
             normalizeId(previousBox?.lastMessageSenderId) ||
             normalizeId(previous?.lastMessageSenderId),
           opponentLastReadMessageId:
             normalizeId(incomingBox?.opponentLastReadMessageId) ||
-            normalizeId(conv.lastReadMessageId) ||
+            normalizeId(normalizedConv.lastReadMessageId) ||
             normalizeId(previousBox?.opponentLastReadMessageId) ||
             normalizeId(previous?.lastReadMessageId),
           unreadCount,
         },
-        lastMessageSenderId: normalizeId(conv.lastMessageSenderId) || normalizeId(previous?.lastMessageSenderId),
-        lastReadMessageId: normalizeId(conv.lastReadMessageId) || normalizeId(previous?.lastReadMessageId),
+        lastMessageSenderId: normalizeId(normalizedConv.lastMessageSenderId) || normalizeId(previous?.lastMessageSenderId),
+        lastReadMessageId: normalizeId(normalizedConv.lastReadMessageId) || normalizeId(previous?.lastReadMessageId),
         isUnread: unreadCount > 0,
       };
     });
@@ -108,30 +120,41 @@ export const useChatStore = create<ChatState>((set) => ({
   appendConversations: (newConversations) => set((state) => {
     const existingById = new Map(state.conversations.map((conv) => [conv.conversationId, conv]));
     const mergedIncoming = newConversations.map((conv) => {
-      const existing = existingById.get(conv.conversationId);
+      const normalizedConv = {
+        ...conv,
+        timeMessage: convertUtcToLocal(conv.timeMessage),
+        seenMessage: convertUtcToLocal(conv.seenMessage),
+        participants: conv.participants.map(p => ({
+          ...p,
+          joinedAt: p.joinedAt ? convertUtcToLocal(p.joinedAt) : p.joinedAt,
+          lastReadAt: p.lastReadAt ? convertUtcToLocal(p.lastReadAt) : p.lastReadAt,
+        }))
+      };
+
+      const existing = existingById.get(normalizedConv.conversationId);
       const existingBox = existing?.boxChatInfo;
-      const incomingBox = conv.boxChatInfo;
-      const inferredUnreadCount = isUnreadBySeenMessage(conv.seenMessage) ? 1 : 0;
-      const unreadCount = incomingBox?.unreadCount ?? existingBox?.unreadCount ?? (conv.isUnread ? 1 : inferredUnreadCount);
+      const incomingBox = normalizedConv.boxChatInfo;
+      const inferredUnreadCount = isUnreadBySeenMessage(normalizedConv.seenMessage) ? 1 : 0;
+      const unreadCount = incomingBox?.unreadCount ?? existingBox?.unreadCount ?? (normalizedConv.isUnread ? 1 : inferredUnreadCount);
 
       return {
-        ...conv,
+        ...normalizedConv,
         boxChatInfo: {
           lastMessageId: normalizeId(incomingBox?.lastMessageId) || normalizeId(existingBox?.lastMessageId),
           lastMessageSenderId:
             normalizeId(incomingBox?.lastMessageSenderId) ||
-            normalizeId(conv.lastMessageSenderId) ||
+            normalizeId(normalizedConv.lastMessageSenderId) ||
             normalizeId(existingBox?.lastMessageSenderId) ||
             normalizeId(existing?.lastMessageSenderId),
           opponentLastReadMessageId:
             normalizeId(incomingBox?.opponentLastReadMessageId) ||
-            normalizeId(conv.lastReadMessageId) ||
+            normalizeId(normalizedConv.lastReadMessageId) ||
             normalizeId(existingBox?.opponentLastReadMessageId) ||
             normalizeId(existing?.lastReadMessageId),
           unreadCount,
         },
-        lastMessageSenderId: normalizeId(conv.lastMessageSenderId) || normalizeId(existing?.lastMessageSenderId),
-        lastReadMessageId: normalizeId(conv.lastReadMessageId) || normalizeId(existing?.lastReadMessageId),
+        lastMessageSenderId: normalizeId(normalizedConv.lastMessageSenderId) || normalizeId(existing?.lastMessageSenderId),
+        lastReadMessageId: normalizeId(normalizedConv.lastReadMessageId) || normalizeId(existing?.lastReadMessageId),
         isUnread: unreadCount > 0,
       };
     });
@@ -143,7 +166,17 @@ export const useChatStore = create<ChatState>((set) => ({
 
   addConversation: (conv) => set((state) => {
     if (state.conversations.some(c => c.conversationId === conv.conversationId)) return state;
-    return { conversations: [conv, ...state.conversations] };
+    const normalizedConv = {
+      ...conv,
+      timeMessage: convertUtcToLocal(conv.timeMessage),
+      seenMessage: convertUtcToLocal(conv.seenMessage),
+      participants: conv.participants.map(p => ({
+        ...p,
+        joinedAt: p.joinedAt ? convertUtcToLocal(p.joinedAt) : p.joinedAt,
+        lastReadAt: p.lastReadAt ? convertUtcToLocal(p.lastReadAt) : p.lastReadAt,
+      }))
+    };
+    return { conversations: [normalizedConv, ...state.conversations] };
   }),
 
   openConversation: (conversationId) => set((state) => ({
@@ -159,7 +192,10 @@ export const useChatStore = create<ChatState>((set) => ({
   setMessages: (conversationId, msgs) => set((state) => ({
     messages: {
       ...state.messages,
-      [conversationId]: msgs
+      [conversationId]: msgs.map(m => ({
+        ...m,
+        sendTime: convertUtcToLocal(m.sendTime),
+      }))
     }
   })),
 
@@ -170,15 +206,20 @@ export const useChatStore = create<ChatState>((set) => ({
       return state;
     }
 
+    const normalizedMsg = {
+      ...message,
+      sendTime: convertUtcToLocal(message.sendTime),
+    };
+
     const lastMessage = existingMsgs[existingMsgs.length - 1];
     if (lastMessage) {
       // Bỏ qua check duplicate cho tin nhắn temp media (có isLoading)
-      if (!message.isLoading && !lastMessage.isLoading) {
+      if (!normalizedMsg.isLoading && !lastMessage.isLoading) {
         const lastTime = new Date(lastMessage.sendTime || '').getTime();
-        const nextTime = new Date(message.sendTime || '').getTime();
+        const nextTime = new Date(normalizedMsg.sendTime || '').getTime();
         const isNearDuplicate =
-          lastMessage.fromUserId === message.fromUserId &&
-          lastMessage.content === message.content &&
+          lastMessage.fromUserId === normalizedMsg.fromUserId &&
+          lastMessage.content === normalizedMsg.content &&
           Number.isFinite(lastTime) &&
           Number.isFinite(nextTime) &&
           Math.abs(lastTime - nextTime) <= 2000;
@@ -193,7 +234,7 @@ export const useChatStore = create<ChatState>((set) => ({
     // const targetConv = state.conversations.find(c => c.conversationId === conversationId);
     const currentUserId = useAuthStore.getState().user?.id;
     // Tin nhắn đến (từ đối phương) khi fromUserId !== currentUserId
-    const isIncoming = message.fromUserId?.toLowerCase() !== currentUserId?.toLowerCase();
+    const isIncoming = normalizedMsg.fromUserId?.toLowerCase() !== currentUserId?.toLowerCase();
     const isUnread = isIncoming && state.activeConversationId !== conversationId;
 
     let updatedConversations = state.conversations;
@@ -203,13 +244,13 @@ export const useChatStore = create<ChatState>((set) => ({
           ? {
             ...c,
             isUnread: true,
-            message: message.content,
-            timeMessage: message.sendTime,
-            lastMessageSenderId: message.fromUserId,
+            message: normalizedMsg.content,
+            timeMessage: normalizedMsg.sendTime,
+            lastMessageSenderId: normalizedMsg.fromUserId,
             boxChatInfo: {
               ...c.boxChatInfo,
-              lastMessageId: message.id,
-              lastMessageSenderId: message.fromUserId,
+              lastMessageId: normalizedMsg.id,
+              lastMessageSenderId: normalizedMsg.fromUserId,
               unreadCount: (c.boxChatInfo?.unreadCount ?? 0) + 1,
             }
           }
@@ -221,13 +262,13 @@ export const useChatStore = create<ChatState>((set) => ({
         c.conversationId === conversationId
           ? {
             ...c,
-            message: message.content,
-            timeMessage: message.sendTime,
-            lastMessageSenderId: message.fromUserId,
+            message: normalizedMsg.content,
+            timeMessage: normalizedMsg.sendTime,
+            lastMessageSenderId: normalizedMsg.fromUserId,
             boxChatInfo: {
               ...c.boxChatInfo,
-              lastMessageId: message.id,
-              lastMessageSenderId: message.fromUserId,
+              lastMessageId: normalizedMsg.id,
+              lastMessageSenderId: normalizedMsg.fromUserId,
             }
           }
           : c
@@ -237,7 +278,7 @@ export const useChatStore = create<ChatState>((set) => ({
     return {
       messages: {
         ...state.messages,
-        [conversationId]: [...existingMsgs, message]
+        [conversationId]: [...existingMsgs, normalizedMsg]
       },
       conversations: updatedConversations
     };
@@ -245,22 +286,27 @@ export const useChatStore = create<ChatState>((set) => ({
 
   prependMessages: (conversationId, msgs) => set((state) => {
     const existingMsgs = state.messages[conversationId] || [];
+    const normalizedMsgs = msgs.map(m => ({
+      ...m,
+      sendTime: convertUtcToLocal(m.sendTime),
+    }));
     return {
       messages: {
         ...state.messages,
-        [conversationId]: [...msgs, ...existingMsgs]
+        [conversationId]: [...normalizedMsgs, ...existingMsgs]
       }
     };
   }),
 
   updateConversationLastMessage: (conversationId, messageText, time, senderId) => set((state) => {
+    const localTime = convertUtcToLocal(time);
     const updatedConversations = state.conversations.map(c => {
       if (c.conversationId === conversationId) {
         return {
           ...c,
           message: messageText,
-          timeMessage: time,
-          seenMessage: time,
+          timeMessage: localTime,
+          seenMessage: localTime,
           lastMessageSenderId: senderId || c.lastMessageSenderId,
           boxChatInfo: {
             ...c.boxChatInfo,
@@ -575,7 +621,7 @@ export const useChatStore = create<ChatState>((set) => ({
     const fakeMessages: MessageItem[] = systemMsgs.map((content) => ({
       id: crypto.randomUUID(),
       content,
-      sendTime: new Date().toISOString(),
+      sendTime: convertUtcToLocal(new Date().toISOString()),
       fromUserId: 'system',
       messageType: 4,
     }));

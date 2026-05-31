@@ -4,6 +4,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { chatApi } from '../../lib/api';
 import { Loader2 } from 'lucide-react';
 import GroupAvatar from './GroupAvatar';
+import { convertUtcToLocal } from '../../lib/utils';
 
 const PAGE_SIZE = 10;
 
@@ -22,7 +23,16 @@ export default function ConversationList() {
     try {
       const res = await chatApi.getConversations(currentUserId, PAGE_SIZE, page);
       if (res.isSuccess && res.data) {
-        const fetched = res.data.items;
+        const fetched = res.data.items.map(conv => ({
+          ...conv,
+          timeMessage: convertUtcToLocal(conv.timeMessage),
+          seenMessage: convertUtcToLocal(conv.seenMessage),
+          participants: conv.participants.map(p => ({
+            ...p,
+            joinedAt: p.joinedAt ? convertUtcToLocal(p.joinedAt) : p.joinedAt,
+            lastReadAt: p.lastReadAt ? convertUtcToLocal(p.lastReadAt) : p.lastReadAt,
+          })),
+        }));
 
         if (isInitial) {
           setConversations(fetched);

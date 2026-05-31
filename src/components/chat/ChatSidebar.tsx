@@ -75,7 +75,7 @@ export default function ChatSidebar() {
             <UsersRound size={20} />
           </button>
           <button
-            onClick={() => window.location.href = `${APP_CONFIG.SSO_BASE_URL}/Account/Manage`}
+            onClick={() => window.open(`${APP_CONFIG.SSO_BASE_URL}/Account/Manage`, '_blank')}
             className="p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors"
             title="Cài đặt tài khoản"
           >

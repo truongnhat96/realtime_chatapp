@@ -4,6 +4,7 @@ import { APP_CONFIG } from '../lib/constants';
 import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
 import { useToastStore } from '../stores/toastStore';
+import { convertUtcToLocal } from '../lib/utils';
 import type {
   GroupCreatedEvent,
   AddedToGroupEvent,
@@ -67,7 +68,8 @@ const useChatHub = () => {
       const serverMessageId = (msg.id || msg.Id || msg.messageId || msg.MessageId) as string | undefined;
       const conversationId = (msg.conversationId || msg.ConversationId) as string | undefined;
       const msgContent = (msg.content || msg.Content) as string | undefined;
-      const msgSendTime = (msg.sendTime || msg.SendTime) as string | undefined;
+      const rawMsgSendTime = (msg.sendTime || msg.SendTime) as string | undefined;
+      const msgSendTime = rawMsgSendTime ? convertUtcToLocal(rawMsgSendTime) : undefined;
       const msgFromUserId = (msg.fromUserId || msg.FromUserId) as string | undefined;
       const msgSenderName = (msg.senderName || msg.SenderName) as string | undefined;
       const msgSenderAvatar = (msg.senderAvatar || msg.SenderAvatar) as string | undefined;
@@ -341,6 +343,8 @@ const useChatHub = () => {
       // và sẽ finalize qua mediaMessageId từ API response
       if (msg.fromUserId?.toLowerCase() === currentUserId?.toLowerCase()) return;
 
+      const localSendTime = msg.sendTime ? convertUtcToLocal(msg.sendTime) : '';
+
       // Tạo attachments array: ưu tiên mảng từ server, fallback single-file fields
       const attachments = msg.attachments && msg.attachments.length > 0
         ? msg.attachments
@@ -350,7 +354,7 @@ const useChatHub = () => {
       useChatStore.getState().addMessage(conversationId, {
         id: msg.id,
         content: msg.content || '',
-        sendTime: msg.sendTime || '',
+        sendTime: localSendTime,
         fromUserId: msg.fromUserId,
         senderName: msg.senderName,
         senderAvatar: msg.senderAvatar,
@@ -367,7 +371,7 @@ const useChatHub = () => {
         : msg.messageType === 2 ? '[Video]'
           : `[File] ${attachments[0]?.fileName || msg.fileName}`;
       useChatStore.getState().updateConversationLastMessage(
-        conversationId, previewText, msg.sendTime || '', msg.fromUserId
+        conversationId, previewText, localSendTime, msg.fromUserId
       );
 
       // Toast cho tin nhắn media nếu không đang mở conversation
@@ -382,7 +386,7 @@ const useChatHub = () => {
           userName: senderName,
           userAvatar: senderAvatar,
           message: previewText,
-          time: msg.sendTime || '',
+          time: localSendTime,
           isOnline: senderIsOnline,
         });
       }

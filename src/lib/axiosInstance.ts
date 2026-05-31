@@ -90,10 +90,14 @@ function scheduleTokenRefresh(): void {
       await refreshAccessToken();
       // scheduleTokenRefresh sẽ được gọi lại tự động qua store subscription
       // khi setAccessToken cập nhật expiresAt mới
-    } catch (error) {
-      // Scheduler KHÔNG gọi logout/setSessionExpired để tránh redirect loop.
-      // Nếu refresh fail ở đây, interceptor sẽ xử lý khi API call tiếp theo bị 401.
+    } catch (error: any) {
       console.error('[RefreshScheduler] Refresh thất bại:', error);
+      // Nếu lỗi là 400 hoặc 401 (do refresh token hết hạn hoặc bị thu hồi trên server)
+      // thì thực hiện đăng xuất ngay để tránh việc user treo ở giao diện khi session đã chết.
+      if (error?.response?.status === 401 || error?.response?.status === 400) {
+        useAuthStore.getState().logout();
+        useAuthStore.getState().setSessionExpired(true);
+      }
     }
   }, Math.max(timeout, 0));
 }

@@ -6,6 +6,7 @@ import { Loader2 } from 'lucide-react';
 import GroupAvatar from './GroupAvatar';
 import MediaMessageBubble from './MediaMessageBubble';
 import MediaViewer from './MediaViewer';
+import { convertUtcToLocal } from '../../lib/utils';
 
 
 const EMPTY_TYPING_USERS: Array<{ userId: string; userName?: string; updatedAt: number }> = [];
@@ -169,7 +170,10 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
     try {
       const res = await chatApi.getMessages(conversationId, 20, page);
       if (res.isSuccess && res.data) {
-        const fetched = res.data.items.reverse(); // API might return oldest first, or newest first. Need to reverse to match bottom-to-top rendering appropriately depending on API. Usually pagination gives newest page 1, descending. So reverse it to show oldest at top.
+        const fetched = res.data.items.reverse().map(msg => ({
+          ...msg,
+          sendTime: convertUtcToLocal(msg.sendTime),
+        }));
 
         // Fallback phục hồi read cursor khi vào lại chat: lấy tin gần nhất của mình đã được đối phương xem.
         if (isInitial && currentUserId) {
