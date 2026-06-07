@@ -18,7 +18,10 @@ import type {
   KickOutResponse,
   LeaveGroupResponse,
   JoinGroupResponse,
-  GetMembersResponse
+  GetMembersResponse,
+  LinkPreviewResponse,
+  FetchConversationMediaResponse,
+  FetchConversationLinksResponse
 } from '../types/chat';
 
 export const chatApi = {
@@ -250,5 +253,24 @@ export const chatApi = {
     );
 
     return response.data;
+  },
+
+  // Lấy link preview metadata (OG tags)
+  getLinkPreview: (url: string): Promise<LinkPreviewResponse> => {
+    return axiosInstance.post<never, LinkPreviewResponse>('/conversation/messages/link-preview', { url });
+  },
+
+  // Lấy danh sách ảnh/video hoặc file theo conversation (phân trang)
+  getConversationMedia: (conversationId: string, isFileRaw: boolean, pageSize: number = 20, pageNumber: number = 1): Promise<FetchConversationMediaResponse> => {
+    return axiosInstance.get<never, FetchConversationMediaResponse>(`/conversation/messages/media/${conversationId}`, {
+      params: { isFileRaw, IsFileRaw: isFileRaw, pageSize, PageSize: pageSize, pageNumber, PageNumber: pageNumber }
+    });
+  },
+
+  // Lấy danh sách link messages theo conversation (phân trang)
+  getConversationLinks: (conversationId: string, pageSize: number = 20, pageNumber: number = 1): Promise<FetchConversationLinksResponse> => {
+    return axiosInstance.get<never, FetchConversationLinksResponse>(`/conversation/messages/link/${conversationId}`, {
+      params: { pageSize, PageSize: pageSize, pageNumber, PageNumber: pageNumber }
+    });
   }
 };

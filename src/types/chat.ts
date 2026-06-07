@@ -6,6 +6,7 @@ export interface User {
   email?: string;
   phoneNumber?: string;
   isOnline?: boolean;
+  lastOnline?: string;
 }
 
 export interface ParticipantInfo {
@@ -15,6 +16,7 @@ export interface ParticipantInfo {
   urlAvatar: string;
   role: number; // 0=Member, 1=Admin, 2=Owner
   isOnline?: boolean;
+  lastOnline?: string;
   joinedAt?: string;
   lastReadMessageId?: string;
   lastReadAt?: string;
@@ -359,4 +361,46 @@ export interface MemberLeftEvent {
   newOwnerId: string | null;
   memberCount: number;
   systemMessages: string[];
+}
+
+// Link Preview
+export interface LinkPreviewData {
+  url: string;
+  title?: string;
+  description?: string;
+  image?: string;
+  siteName?: string;
+}
+
+export interface LinkPreviewResponse {
+  data: LinkPreviewData;
+  messages: string[];
+  isSuccess: boolean;
+}
+
+// Conversation Media & Link items (sidebar overlay)
+export interface ConversationMediaItem {
+  id: string;
+  url: string;
+  fileName: string;
+  sendTime: string;
+  size: number;
+}
+
+export interface ConversationLinkItem {
+  id: string;
+  content: string;
+  sendTime: string;
+}
+
+export interface FetchConversationMediaResponse {
+  data: PaginationData<ConversationMediaItem>;
+  messages: string[];
+  isSuccess: boolean;
+}
+
+export interface FetchConversationLinksResponse {
+  data: PaginationData<ConversationLinkItem>;
+  messages: string[];
+  isSuccess: boolean;
 }

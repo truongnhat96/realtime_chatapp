@@ -66,3 +66,65 @@ export function convertUtcToLocal(utcDateTimeStr: string | null | undefined): st
     return utcDateTimeStr;
   }
 }
+
+/** Regex kiểm tra chuỗi có phải URL hợp lệ (http/https hoặc domain trực tiếp) */
+const URL_PATTERN = /^(https?:\/\/[^\s]+|(?:www\.)[^\s]+\.[a-z]{2,}[^\s]*|[a-z0-9][-a-z0-9]*\.[a-z]{2,}(?:\.[a-z]{2,})?(?:\/[^\s]*)?)$/i;
+
+/**
+ * Trích xuất URL đầu tiên từ văn bản người dùng nhập.
+ * Split theo khoảng trắng rồi kiểm tra từng từ.
+ */
+export function getFirstUrl(text: string): string | null {
+  if (!text) return null;
+  const words = text.trim().split(/\s+/);
+  for (const word of words) {
+    if (URL_PATTERN.test(word)) {
+      return word;
+    }
+  }
+  return null;
+}
+
+/**
+ * Chuẩn hóa URL: thêm https:// nếu chưa có scheme.
+ */
+export function normalizeUrl(url: string): string {
+  if (/^https?:\/\//i.test(url)) return url;
+  return `https://${url}`;
+}
+
+export interface TextToken {
+  text: string;
+  isUrl: boolean;
+  href: string;
+}
+
+/**
+ * Tách văn bản thành các từ và khoảng trắng để giữ nguyên format, kiểm tra và đánh dấu URL.
+ */
+export function tokenizeText(text: string): TextToken[] {
+  if (!text) return [];
+  const parts = text.split(/(\s+)/);
+  return parts.map((part) => {
+    if (!part || /^\s+$/.test(part)) {
+      return { text: part, isUrl: false, href: '' };
+    }
+    const isUrl = URL_PATTERN.test(part);
+    return {
+      text: part,
+      isUrl,
+      href: isUrl ? normalizeUrl(part) : ''
+    };
+  });
+}
+
+/**
+ * Giải mã các ký tự HTML entities (ví dụ: &amp; &#x1f480; ...) về dạng ký tự thường.
+ */
+export function decodeHtmlEntities(str: string | null | undefined): string {
+  if (!str) return '';
+  if (typeof document === 'undefined') return str;
+  const txt = document.createElement('textarea');
+  txt.innerHTML = str;
+  return txt.value;
+}

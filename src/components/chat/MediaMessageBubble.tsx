@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Play, Pause, FileText, Download, Loader2 } from 'lucide-react';
 import type { Attachment } from '../../types/chat';
 import MessageAttachments from './MessageAttachments';
@@ -44,6 +44,44 @@ export default function MediaMessageBubble({
     }
     setIsPlaying(!isPlaying);
   }, [isPlaying]);
+
+  // Tự động tạm dừng video khi trượt khỏi tầm nhìn (IntersectionObserver)
+  useEffect(() => {
+    if (messageType !== 2 || !videoRef.current) return;
+    const videoEl = videoRef.current;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting) {
+          if (videoEl && !videoEl.paused) {
+            videoEl.pause();
+            setIsPlaying(false);
+          }
+        }
+      },
+      { threshold: 0 }
+    );
+
+    observer.observe(videoEl);
+    return () => {
+      observer.disconnect();
+    };
+  }, [messageType]);
+
+  // Lắng nghe sự kiện để tạm dừng video khi mở MediaViewer fullscreen
+  useEffect(() => {
+    const handlePause = () => {
+      if (videoRef.current && !videoRef.current.paused) {
+        videoRef.current.pause();
+        setIsPlaying(false);
+      }
+    };
+
+    window.addEventListener('pause-inline-videos', handlePause);
+    return () => {
+      window.removeEventListener('pause-inline-videos', handlePause);
+    };
+  }, []);
 
   // Progress overlay cho tất cả media types
   const renderProgressOverlay = () => {
@@ -117,15 +155,16 @@ export default function MediaMessageBubble({
                 style={{ maxHeight: 400 }}
                 playsInline
                 onEnded={() => setIsPlaying(false)}
-                onClick={(e) => e.stopPropagation()}
               />
               {/* Play/Pause overlay */}
               {!isLoading && (
                 <div
                   className={`absolute inset-0 flex items-center justify-center transition-opacity ${isPlaying ? 'opacity-0 hover:opacity-100' : 'opacity-100'}`}
-                  onClick={(e) => { e.stopPropagation(); toggleVideoPlay(); }}
                 >
-                  <div className="w-14 h-14 rounded-full bg-black/50 flex items-center justify-center backdrop-blur-sm">
+                  <div
+                    className="w-14 h-14 rounded-full bg-black/50 flex items-center justify-center backdrop-blur-sm cursor-pointer hover:scale-105 transition-transform"
+                    onClick={(e) => { e.stopPropagation(); toggleVideoPlay(); }}
+                  >
                     {isPlaying ? (
                       <Pause size={28} className="text-white" />
                     ) : (

@@ -178,7 +178,7 @@ export default function ConversationList() {
               <div className="flex justify-between items-center gap-2">
                 <p className={`text-sm truncate flex-1 ${isUnread ? 'text-gray-900 dark:text-white font-bold' : isActive ? 'text-gray-900 dark:text-gray-300' : 'text-gray-500 dark:text-gray-400'}`}>
                   {messagePrefix && <span className="mr-0">{messagePrefix}</span>}
-                  {conv.messageType === 1 ? '[Hình ảnh]' : conv.messageType === 2 ? '[Video]' : conv.messageType === 3 ? '[File]' : conv.message}
+                  {conv.messageType === 1 ? '[Hình ảnh]' : conv.messageType === 2 ? '[Video]' : conv.messageType === 3 ? '[File]' : conv.messageType === 5 ? '[Liên kết]' : conv.message}
                 </p>
                 {isUnread ? (
                   <div className="w-2.5 h-2.5 bg-[#8ED8ED] rounded-full flex-shrink-0"></div>

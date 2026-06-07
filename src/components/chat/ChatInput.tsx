@@ -1,5 +1,8 @@
-import { useState, useRef, useCallback } from 'react';
-import { Send, Smile, Paperclip, ImagePlus, X, FileText, Plus } from 'lucide-react';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import { Send, Smile, Paperclip, ImagePlus, X, FileText, Plus, Link2 } from 'lucide-react';
+import { chatApi } from '../../lib/api';
+import { getFirstUrl, normalizeUrl } from '../../lib/utils';
+import type { LinkPreviewData } from '../../types/chat';
 
 interface Props {
   onSendMessage: (text: string) => void | Promise<void>;
@@ -37,6 +40,67 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onTypingInp
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
+
+  // === Link Preview State ===
+  const [linkPreview, setLinkPreview] = useState<LinkPreviewData | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [dismissedUrl, setDismissedUrl] = useState<string | null>(null);
+  const [isLoadingPreview, setIsLoadingPreview] = useState(false);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Debounced link detection (500ms)
+  useEffect(() => {
+    // Cleanup previous timer
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+
+    const rawUrl = getFirstUrl(message);
+    const normalized = rawUrl ? normalizeUrl(rawUrl) : null;
+
+    // Nếu không có URL -> xóa preview
+    if (!normalized) {
+      setLinkPreview(null);
+      setPreviewUrl(null);
+      setIsLoadingPreview(false);
+      return;
+    }
+
+    // Nếu URL đã bị dismiss -> không hiện lại
+    if (normalized === dismissedUrl) return;
+
+    // Nếu URL giống URL hiện tại -> giữ nguyên
+    if (normalized === previewUrl && linkPreview) return;
+
+    // Debounce 500ms trước khi gọi API
+    setIsLoadingPreview(true);
+    debounceTimerRef.current = setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await chatApi.getLinkPreview(normalized);
+          if (res.isSuccess && res.data) {
+            setLinkPreview(res.data);
+            setPreviewUrl(normalized);
+          } else {
+            setLinkPreview(null);
+            setPreviewUrl(null);
+          }
+        } catch {
+          setLinkPreview(null);
+          setPreviewUrl(null);
+        } finally {
+          setIsLoadingPreview(false);
+        }
+      })();
+    }, 500);
+
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, [message, dismissedUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFilesSelect = useCallback((files: FileList | null, inputRef: React.RefObject<HTMLInputElement | null>) => {
     if (!files || files.length === 0) return;
@@ -88,6 +152,7 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onTypingInp
       setMessage('');
       onTypingInputChange?.('');
       clearAllFiles();
+      clearLinkPreview();
       setIsSending(true);
       try {
         // Gửi text riêng nếu có
@@ -111,6 +176,7 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onTypingInp
       await Promise.resolve(onSendMessage(trimmedMessage));
       setMessage('');
       onTypingInputChange?.('');
+      clearLinkPreview();
     } catch (error) {
       console.error('Failed to send message: ', error);
     } finally {
@@ -126,8 +192,52 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onTypingInp
 
   const canSend = selectedFiles.length > 0 || message.trim();
 
+  const clearLinkPreview = useCallback(() => {
+    setLinkPreview(null);
+    setPreviewUrl(null);
+    setDismissedUrl(null);
+    setIsLoadingPreview(false);
+  }, []);
+
+  const dismissLinkPreview = useCallback(() => {
+    setDismissedUrl(previewUrl);
+    setLinkPreview(null);
+    setPreviewUrl(null);
+    setIsLoadingPreview(false);
+  }, [previewUrl]);
+
   return (
     <div className="bg-white dark:bg-[#1E1E1E] border-t border-gray-200 dark:border-gray-800">
+      {/* Link Preview bar */}
+      {(linkPreview || isLoadingPreview) && !selectedFiles.length && (
+        <div className="px-4 pt-3">
+          <div className="flex items-center gap-3 bg-gray-50 dark:bg-[#2C2C2C] rounded-xl px-3 py-2.5 border border-gray-200 dark:border-gray-700">
+            <Link2 size={18} className="text-gray-400 flex-shrink-0" />
+            {isLoadingPreview ? (
+              <div className="flex-1 min-w-0 animate-pulse">
+                <div className="h-3 w-24 bg-gray-200 dark:bg-gray-600 rounded mb-1" />
+                <div className="h-2.5 w-48 bg-gray-200 dark:bg-gray-600 rounded" />
+              </div>
+            ) : linkPreview ? (
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-gray-900 dark:text-gray-100 truncate">
+                  {linkPreview.siteName || linkPreview.title || new URL(normalizeUrl(previewUrl || '')).hostname}
+                </p>
+                <p className="text-[11px] text-gray-400 dark:text-gray-500 truncate">
+                  {previewUrl}
+                </p>
+              </div>
+            ) : null}
+            <button
+              onClick={dismissLinkPreview}
+              className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-full transition-colors flex-shrink-0"
+              title="Tắt preview"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
       {/* Preview area - danh sách file đã chọn */}
       {selectedFiles.length > 0 && (
         <div className="px-4">

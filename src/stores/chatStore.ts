@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ConversationItem, MessageItem, ParticipantInfo } from '../types/chat';
+import type { ConversationItem, MessageItem, ParticipantInfo, LinkPreviewData } from '../types/chat';
 import { useAuthStore } from './authStore';
 import { convertUtcToLocal } from '../lib/utils';
 
@@ -29,6 +29,7 @@ interface ChatState {
   onlineUsers: Record<string, boolean>;
   typingByConversationId: Record<string, TypingUserState[]>;
   conversationOpenSignal: Record<string, number>;
+  linkPreviews: Record<string, LinkPreviewData>;
 
   setConversations: (conversations: ConversationItem[]) => void;
   appendConversations: (conversations: ConversationItem[]) => void;
@@ -39,7 +40,7 @@ interface ChatState {
   addMessage: (conversationId: string, message: MessageItem) => void;
   prependMessages: (conversationId: string, messages: MessageItem[]) => void; // for load more
   updateConversationLastMessage: (conversationId: string, messageText: string, time: string, senderId?: string) => void;
-  setUserOnlineStatus: (userId: string, isOnline: boolean) => void;
+  setUserOnlineStatus: (userId: string, isOnline: boolean, lastOnline?: string) => void;
   setUserTyping: (conversationId: string, userId: string, isTyping: boolean, userName?: string) => void;
   clearTypingConversation: (conversationId: string) => void;
   clearStaleTyping: (conversationId: string, maxAgeMs?: number) => void;
@@ -62,6 +63,7 @@ interface ChatState {
   removeParticipantFromConversation: (conversationId: string, userId: string, memberCount: number) => void;
   updateParticipantRole: (conversationId: string, userId: string, newRole: number) => void;
   addSystemMessages: (conversationId: string, messages: string[]) => void;
+  setLinkPreview: (url: string, data: LinkPreviewData) => void;
 }
 
 export const useChatStore = create<ChatState>((set) => ({
@@ -71,6 +73,7 @@ export const useChatStore = create<ChatState>((set) => ({
   onlineUsers: {},
   typingByConversationId: {},
   conversationOpenSignal: {},
+  linkPreviews: {},
 
   setConversations: (incomingConversations) => set((state) => {
     const previousById = new Map(state.conversations.map((conv) => [conv.conversationId, conv]));
@@ -83,7 +86,12 @@ export const useChatStore = create<ChatState>((set) => ({
           ...p,
           joinedAt: p.joinedAt ? convertUtcToLocal(p.joinedAt) : p.joinedAt,
           lastReadAt: p.lastReadAt ? convertUtcToLocal(p.lastReadAt) : p.lastReadAt,
-        }))
+          lastOnline: p.lastOnline ? convertUtcToLocal(p.lastOnline) : p.lastOnline,
+        })),
+        user: conv.user ? {
+          ...conv.user,
+          lastOnline: conv.user.lastOnline ? convertUtcToLocal(conv.user.lastOnline) : conv.user.lastOnline,
+        } : conv.user
       };
 
       const previous = previousById.get(normalizedConv.conversationId);
@@ -128,7 +136,12 @@ export const useChatStore = create<ChatState>((set) => ({
           ...p,
           joinedAt: p.joinedAt ? convertUtcToLocal(p.joinedAt) : p.joinedAt,
           lastReadAt: p.lastReadAt ? convertUtcToLocal(p.lastReadAt) : p.lastReadAt,
-        }))
+          lastOnline: p.lastOnline ? convertUtcToLocal(p.lastOnline) : p.lastOnline,
+        })),
+        user: conv.user ? {
+          ...conv.user,
+          lastOnline: conv.user.lastOnline ? convertUtcToLocal(conv.user.lastOnline) : conv.user.lastOnline,
+        } : conv.user
       };
 
       const existing = existingById.get(normalizedConv.conversationId);
@@ -174,7 +187,12 @@ export const useChatStore = create<ChatState>((set) => ({
         ...p,
         joinedAt: p.joinedAt ? convertUtcToLocal(p.joinedAt) : p.joinedAt,
         lastReadAt: p.lastReadAt ? convertUtcToLocal(p.lastReadAt) : p.lastReadAt,
-      }))
+        lastOnline: p.lastOnline ? convertUtcToLocal(p.lastOnline) : p.lastOnline,
+      })),
+      user: conv.user ? {
+        ...conv.user,
+        lastOnline: conv.user.lastOnline ? convertUtcToLocal(conv.user.lastOnline) : conv.user.lastOnline,
+      } : conv.user
     };
     return { conversations: [normalizedConv, ...state.conversations] };
   }),
@@ -323,12 +341,48 @@ export const useChatStore = create<ChatState>((set) => ({
     return { conversations: updatedConversations };
   }),
 
-  setUserOnlineStatus: (userId, isOnline) => set((state) => ({
-    onlineUsers: {
-      ...state.onlineUsers,
-      [userId.toLowerCase()]: isOnline
-    }
-  })),
+  setUserOnlineStatus: (userId, isOnline, lastOnline) => set((state) => {
+    const key = userId.toLowerCase();
+    const localLastOnline = lastOnline ? convertUtcToLocal(lastOnline) : undefined;
+
+    // Cập nhật lastOnline vào conversation user / participants khi offline
+    const conversations = state.conversations.map(c => {
+      // Chat 1-1: cập nhật user.lastOnline và user.isOnline
+      if (c.type === 0 && c.user && c.user.id.toLowerCase() === key) {
+        return {
+          ...c,
+          user: {
+            ...c.user,
+            isOnline,
+            ...(localLastOnline ? { lastOnline: localLastOnline } : {}),
+          },
+        };
+      }
+      // Group: cập nhật participant tương ứng
+      if (c.type === 1) {
+        const hasUser = c.participants.some(p => p.id.toLowerCase() === key);
+        if (hasUser) {
+          return {
+            ...c,
+            participants: c.participants.map(p =>
+              p.id.toLowerCase() === key
+                ? { ...p, isOnline, ...(localLastOnline ? { lastOnline: localLastOnline } : {}) }
+                : p
+            ),
+          };
+        }
+      }
+      return c;
+    });
+
+    return {
+      onlineUsers: {
+        ...state.onlineUsers,
+        [key]: isOnline,
+      },
+      conversations,
+    };
+  }),
 
   setUserTyping: (conversationId, userId, isTyping, userName) => set((state) => {
     if (!conversationId || !userId) {
@@ -513,7 +567,7 @@ export const useChatStore = create<ChatState>((set) => ({
 
   updateMessageId: (conversationId, tempId, serverId) => set((state) => {
     const msgs = state.messages[conversationId] || [];
-    const updatedMsgs = msgs.map(m => m.id === tempId ? { ...m, id: serverId } : m);
+    const updatedMsgs = msgs.map(m => m.id === tempId ? { ...m, id: serverId, isLoading: false } : m);
 
     // Nếu lastReadMessageId đang trỏ vào tempId, cũng cập nhật nó luôn
     const updatedConvs = state.conversations.map(c =>
@@ -683,4 +737,11 @@ export const useChatStore = create<ChatState>((set) => ({
       }
     };
   }),
+
+  setLinkPreview: (url, data) => set((state) => ({
+    linkPreviews: {
+      ...state.linkPreviews,
+      [url]: data
+    }
+  })),
 }));

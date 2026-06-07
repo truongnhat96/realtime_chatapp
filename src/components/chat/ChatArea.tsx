@@ -3,6 +3,7 @@ import { useChatStore } from '../../stores/chatStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useTypingIndicator } from '../../hooks/useTypingIndicator';
 import { useMediaUpload } from '../../hooks/useMediaUpload';
+import { useLastOnline } from '../../hooks/useLastOnline';
 import { ArrowLeft, Phone, Video, Info } from 'lucide-react';
 import MessageList from './MessageList';
 import ChatInput from './ChatInput';
@@ -37,17 +38,46 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
     ? (conversation.participants.find(p => p.id !== currentUserId)?.id || '')
     : (user?.id || '');
 
-  const isOnline = !isGroup && user ? (onlineUsers[user.id.toLowerCase()] ?? user.isOnline) : false;
+  const isOnline = useMemo(() => {
+    if (isGroup) {
+      // Nhóm: ít nhất 1 thành viên khác đang online
+      return conversation.participants.some(
+        p => p.id !== currentUserId && (onlineUsers[p.id.toLowerCase()] ?? p.isOnline)
+      );
+    }
+    return user ? (onlineUsers[user.id.toLowerCase()] ?? user.isOnline ?? false) : false;
+  }, [isGroup, conversation.participants, user, onlineUsers, currentUserId]);
+
+  // Lấy lastOnline phù hợp: private → user.lastOnline, group → muộn nhất trong các thành viên
+  const lastOnline = useMemo(() => {
+    if (isOnline) return null; // Đang online, không cần
+    if (!isGroup) {
+      return user?.lastOnline || null;
+    }
+    // Group offline: tìm lastOnline muộn nhất trong các thành viên khác
+    let latest: string | null = null;
+    for (const p of conversation.participants) {
+      if (p.id === currentUserId) continue;
+      if (p.lastOnline) {
+        if (!latest || new Date(p.lastOnline).getTime() > new Date(latest).getTime()) {
+          latest = p.lastOnline;
+        }
+      }
+    }
+    return latest;
+  }, [isOnline, isGroup, user, conversation.participants, currentUserId]);
 
   const displayName = isGroup
     ? (conversation.groupInfo?.name || 'Nhóm chat')
     : (user?.name || '');
 
+  const lastOnlineLabel = useLastOnline(lastOnline, isOnline ?? false);
+
   const statusText = !isConnected
     ? 'Đang kết nối...'
     : isGroup
-      ? `${conversation.groupInfo?.memberCount || conversation.participants.length} thành viên`
-      : (isOnline ? 'Đang hoạt động' : 'Ngoại tuyến');
+      ? (isOnline ? 'Đang hoạt động' : (lastOnlineLabel !== 'Ngoại tuyến' ? lastOnlineLabel : `${conversation.groupInfo?.memberCount || conversation.participants.length} thành viên`))
+      : lastOnlineLabel;
 
   const {
     onTypingInputChange,

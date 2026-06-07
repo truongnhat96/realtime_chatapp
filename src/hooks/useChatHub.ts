@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { HubConnection, HubConnectionBuilder, LogLevel, HttpTransportType } from '@microsoft/signalr';
+import { HubConnection, HubConnectionBuilder, LogLevel } from '@microsoft/signalr';
 import { APP_CONFIG } from '../lib/constants';
 import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
 import { useToastStore } from '../stores/toastStore';
-import { convertUtcToLocal } from '../lib/utils';
+import { convertUtcToLocal, getFirstUrl } from '../lib/utils';
 import type {
   GroupCreatedEvent,
   AddedToGroupEvent,
@@ -55,7 +55,6 @@ const useChatHub = () => {
 
     const connection = new HubConnectionBuilder()
       .withUrl(APP_CONFIG.HUB_URL, {
-        transport: HttpTransportType.LongPolling,
         accessTokenFactory: () => useAuthStore.getState().accessToken || ''
       })
       .configureLogging(LogLevel.Information)
@@ -191,8 +190,17 @@ const useChatHub = () => {
       useChatStore.getState().setUserOnlineStatus(userId, true);
     };
 
-    const onUserOffline = (userId: string) => {
-      useChatStore.getState().setUserOnlineStatus(userId, false);
+    const onUserOffline = (payload: string | Record<string, unknown>) => {
+      // Server trả object { UserId, LastOnlineAt } thay vì chỉ userId string
+      if (typeof payload === 'string') {
+        useChatStore.getState().setUserOnlineStatus(payload, false);
+        return;
+      }
+      const userId = (payload.userId || payload.UserId) as string | undefined;
+      const lastOnlineAt = (payload.lastOnlineAt || payload.LastOnlineAt) as string | undefined;
+      if (userId) {
+        useChatStore.getState().setUserOnlineStatus(userId, false, lastOnlineAt);
+      }
     };
 
     const onUserTyping = (payload: Record<string, unknown>) => {
@@ -462,9 +470,18 @@ const useChatHub = () => {
       }
     });
 
+    // Graceful disconnect khi tab/window bị đóng hoặc reload
+    const handleBeforeUnload = () => {
+      if (connection.state !== 'Disconnected') {
+        connection.stop().catch(() => undefined);
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
     return () => {
       isMounted = false;
       clearTimeout(startTimer);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
       connection.off('ReceiveMessage', onReceiveMessage);
       connection.off('ReceiveMediaMessage', onReceiveMediaMessage);
       connection.off('UserOnline', onUserOnline);
@@ -489,48 +506,61 @@ const useChatHub = () => {
 
   const sendMessage = useCallback(async (conversationId: string, content: string, toUserId: string) => {
     if (connectionRef.current && isConnected) {
+      const detectedUrl = getFirstUrl(content);
+      const msgType = detectedUrl ? 5 : 0;
+
       const payload = {
         conversationId,
         content,
-        messageType: 0,
+        messageType: msgType,
         sendTime: new Date().toISOString(),
         toUserId,
         // Thêm PascalCase để đối phó với model binding backend nếu nó bị strict
         ConversationId: conversationId,
         Content: content,
-        MessageType: 0,
+        MessageType: msgType,
         SendTime: new Date().toISOString(),
         ToUserId: toUserId
       };
 
+      // Thêm tin nhắn tạm vào store TRƯỚC khi invoke để tránh race condition
+      // (server broadcast ReceiveMessage về trước khi invoke resolve)
+      const currentUserId = useAuthStore.getState().user?.id;
+      const tempId = crypto.randomUUID();
+
+      if (currentUserId) {
+        pendingSelfMessagesRef.current.push({
+          conversationId,
+          content,
+          tempId,
+          createdAtMs: Date.now(),
+        });
+        // Dọn dẹp tin nhắn chờ quá hạn (15s)
+        pendingSelfMessagesRef.current = pendingSelfMessagesRef.current.filter((item) => {
+          return Date.now() - item.createdAtMs < 15000;
+        });
+
+        useChatStore.getState().addMessage(conversationId, {
+          id: tempId,
+          content,
+          sendTime: payload.sendTime,
+          fromUserId: currentUserId,
+          messageType: msgType,
+          isLoading: true,
+        });
+        useChatStore.getState().updateConversationLastMessage(conversationId, content, payload.sendTime, currentUserId);
+      }
+
       try {
         await connectionRef.current.invoke("SendMessageToConversation", payload);
-
-        // Theo DOCs, phải tự thêm tin nhắn này vào state cục bộ
-        const currentUserId = useAuthStore.getState().user?.id;
-        if (currentUserId) {
-          const tempId = crypto.randomUUID();
-          pendingSelfMessagesRef.current.push({
-            conversationId,
-            content,
-            tempId,
-            createdAtMs: Date.now(),
-          });
-          pendingSelfMessagesRef.current = pendingSelfMessagesRef.current.filter((item) => {
-            return Date.now() - item.createdAtMs < 15000;
-          });
-
-          useChatStore.getState().addMessage(conversationId, {
-            id: tempId,
-            content,
-            sendTime: payload.sendTime,
-            fromUserId: currentUserId,
-            messageType: 0,
-          });
-          useChatStore.getState().updateConversationLastMessage(conversationId, content, payload.sendTime, currentUserId);
-        }
       } catch (error) {
         console.error("Error sending message: ", error);
+        if (currentUserId) {
+          // Xóa khỏi danh sách pending
+          pendingSelfMessagesRef.current = pendingSelfMessagesRef.current.filter(item => item.tempId !== tempId);
+          // Đánh dấu lỗi gửi tin nhắn
+          useChatStore.getState().updateMessageError(conversationId, tempId, 'Gửi lỗi');
+        }
         throw error;
       }
     }

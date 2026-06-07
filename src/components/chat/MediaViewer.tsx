@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import Lightbox from 'yet-another-react-lightbox';
 import VideoPlugin from 'yet-another-react-lightbox/plugins/video';
 import ZoomPlugin from 'yet-another-react-lightbox/plugins/zoom';
@@ -24,6 +24,13 @@ interface Props {
  * - Video player với play/pause, seekbar
  */
 export default function MediaViewer({ isOpen, onClose, startIndex, messages }: Props) {
+  // Tạm dừng mọi video đang phát inline khi mở viewer
+  useEffect(() => {
+    if (isOpen) {
+      window.dispatchEvent(new CustomEvent('pause-inline-videos'));
+    }
+  }, [isOpen]);
+
   // Trích xuất tất cả media slides từ messages
   const slides = useMemo(() => {
     const result: import('yet-another-react-lightbox').Slide[] = [];
@@ -83,7 +90,7 @@ export default function MediaViewer({ isOpen, onClose, startIndex, messages }: P
         container: { backgroundColor: 'rgba(0, 0, 0, 0.92)' },
       }}
       video={{
-        autoPlay: true,
+        autoPlay: false,
         controls: true,
       }}
       animation={{ fade: 300 }}

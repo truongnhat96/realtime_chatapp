@@ -1,11 +1,13 @@
 import { useState, useMemo } from 'react';
-import { X, UserPlus, LogOut, Link2, Copy, Check, Trash2, ChevronDown, Image, FileText, LinkIcon } from 'lucide-react';
+import { X, UserPlus, LogOut, Link2, Copy, Check, Trash2, ChevronDown, Image, FileText, LinkIcon, ChevronRight } from 'lucide-react';
 import { useChatStore } from '../../stores/chatStore';
 import { useAuthStore } from '../../stores/authStore';
 import { chatApi } from '../../lib/api';
 import GroupAvatar from './GroupAvatar';
 import CreateGroupModal from './CreateGroupModal';
+import MediaOverlaySidebar from './MediaOverlaySidebar';
 import type { ConversationItem } from '../../types/chat';
+import type { OverlayTab } from '../../hooks/useMediaOverlay';
 
 interface Props {
   conversation: ConversationItem;
@@ -23,6 +25,7 @@ export default function ChatDetailSidebar({ conversation, onClose, onLeaveConver
   const [expandMembers, setExpandMembers] = useState(true);
   const [isKicking, setIsKicking] = useState<string | null>(null);
   const [isLeaving, setIsLeaving] = useState(false);
+  const [overlayTab, setOverlayTab] = useState<OverlayTab | null>(null);
 
   const isGroup = conversation.type === 1;
   const groupInfo = conversation.groupInfo;
@@ -96,7 +99,7 @@ export default function ChatDetailSidebar({ conversation, onClose, onLeaveConver
   };
 
   return (
-    <div className="flex flex-col h-full bg-white dark:bg-[#1E1E1E] border-l border-gray-200 dark:border-gray-800">
+    <div className="relative flex flex-col h-full bg-white dark:bg-[#1E1E1E] border-l border-gray-200 dark:border-gray-800">
       {/* Header */}
       <div className="px-4 py-3.5 flex items-center justify-between border-b border-gray-200 dark:border-gray-800">
         <h3 className="font-bold text-base text-gray-900 dark:text-white">Chi tiết</h3>
@@ -218,31 +221,40 @@ export default function ChatDetailSidebar({ conversation, onClose, onLeaveConver
         )}
 
         {/* File phương tiện */}
-        <div className="mx-4 mb-3">
+        <button
+          onClick={() => setOverlayTab('media')}
+          className="mx-4 mb-3 w-[calc(100%-2rem)] text-left"
+        >
           <div className="flex items-center gap-2 py-2">
             <Image size={16} className="text-gray-500" />
-            <span className="text-sm font-semibold text-gray-900 dark:text-white">File phương tiện</span>
+            <span className="text-sm font-semibold text-gray-900 dark:text-white flex-1">File phương tiện</span>
+            <ChevronRight size={16} className="text-gray-400" />
           </div>
-          <p className="text-xs text-gray-400 pl-6">Chưa có file phương tiện</p>
-        </div>
+        </button>
 
         {/* File */}
-        <div className="mx-4 mb-3">
+        <button
+          onClick={() => setOverlayTab('file')}
+          className="mx-4 mb-3 w-[calc(100%-2rem)] text-left"
+        >
           <div className="flex items-center gap-2 py-2">
             <FileText size={16} className="text-gray-500" />
-            <span className="text-sm font-semibold text-gray-900 dark:text-white">File</span>
+            <span className="text-sm font-semibold text-gray-900 dark:text-white flex-1">File</span>
+            <ChevronRight size={16} className="text-gray-400" />
           </div>
-          <p className="text-xs text-gray-400 pl-6">Chưa có file</p>
-        </div>
+        </button>
 
         {/* Liên kết */}
-        <div className="mx-4 mb-3">
+        <button
+          onClick={() => setOverlayTab('link')}
+          className="mx-4 mb-3 w-[calc(100%-2rem)] text-left"
+        >
           <div className="flex items-center gap-2 py-2">
             <LinkIcon size={16} className="text-gray-500" />
-            <span className="text-sm font-semibold text-gray-900 dark:text-white">Liên kết</span>
+            <span className="text-sm font-semibold text-gray-900 dark:text-white flex-1">Liên kết</span>
+            <ChevronRight size={16} className="text-gray-400" />
           </div>
-          <p className="text-xs text-gray-400 pl-6">Chưa có liên kết</p>
-        </div>
+        </button>
 
         {/* Rời nhóm */}
         {isGroup && (
@@ -295,6 +307,15 @@ export default function ChatDetailSidebar({ conversation, onClose, onLeaveConver
           onGroupCreated={handleMemberAdded}
           addToConversationId={conversation.conversationId}
           existingMemberIds={conversation.participants.map(p => p.id)}
+        />
+      )}
+
+      {/* Media / File / Link Overlay */}
+      {overlayTab && (
+        <MediaOverlaySidebar
+          conversationId={conversation.conversationId}
+          initialTab={overlayTab}
+          onClose={() => setOverlayTab(null)}
         />
       )}
     </div>

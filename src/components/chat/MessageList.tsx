@@ -2,11 +2,12 @@ import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import { useChatStore } from '../../stores/chatStore';
 import { useAuthStore } from '../../stores/authStore';
 import { chatApi } from '../../lib/api';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Check, AlertCircle } from 'lucide-react';
 import GroupAvatar from './GroupAvatar';
 import MediaMessageBubble from './MediaMessageBubble';
 import MediaViewer from './MediaViewer';
-import { convertUtcToLocal } from '../../lib/utils';
+import LinkPreviewCard from './LinkPreviewCard';
+import { convertUtcToLocal, tokenizeText } from '../../lib/utils';
 
 
 const EMPTY_TYPING_USERS: Array<{ userId: string; userName?: string; updatedAt: number }> = [];
@@ -323,6 +324,14 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
         const showAvatar = !isMine && !isSameSenderAsNext;
         // Tight gap within same-sender group, larger gap between groups
         const marginTop = idx === 0 ? 'mt-0' : isSameSenderAsPrev ? 'mt-0.5' : 'mt-4';
+
+        // Check if this is our last message, sent successfully but not yet read
+        const isLastMessage = idx === currentMessages.length - 1;
+        const isSentNotRead = isMine && !msg.isLoading && !msg.error && isLastMessage && (
+          isGroup
+            ? (!msg.readBy || msg.readBy.filter(rId => rId?.toLowerCase() !== currentUserId?.toLowerCase()).length === 0)
+            : (msg.id !== lastReadMessageId)
+        );
         
         // Read receipt logic: 1-1 và group chat
         // Chat 1-1: hiện avatar đối phương tại tin nhắn cuối cùng họ đã đọc
@@ -360,7 +369,7 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                 {msg.senderName || getSenderName(msg.fromUserId)}
               </span>
             )}
-            <div className={`flex items-end gap-2 ${isMine ? 'flex-row-reverse' : 'flex-row'} ${(msg.messageType === 1 || msg.messageType === 2 || msg.messageType === 3) ? 'max-w-[85%]' : 'max-w-[50%]'}`}>
+            <div className={`flex items-end gap-2 ${isMine ? 'flex-row-reverse' : 'flex-row'} ${(msg.messageType === 1 || msg.messageType === 2 || msg.messageType === 3 || msg.messageType === 5) ? 'max-w-[85%]' : 'max-w-[50%]'}`}>
               {!isMine && (
                 <div className="w-9 flex-shrink-0">
                   {showAvatar ? (
@@ -405,6 +414,46 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                       </div>
                     )}
                   </>
+                ) : msg.messageType === 5 ? (
+                  /* Link message: text + preview card wrapped together */
+                  <div
+                    className={`flex flex-col min-w-0 w-[320px] max-w-full overflow-hidden border border-gray-200/50 dark:border-gray-700/50 ${isMine
+                      ? `bg-[#8ED8ED] text-gray-900 ${isSameSenderAsPrev && isSameSenderAsNext ? 'rounded-2xl rounded-br-sm'
+                        : isSameSenderAsPrev ? 'rounded-2xl rounded-tr-sm rounded-br-none'
+                          : isSameSenderAsNext ? 'rounded-2xl rounded-br-sm'
+                            : 'rounded-2xl rounded-br-none'
+                      }`
+                      : `bg-white dark:bg-[#2C2C2C] text-gray-900 dark:text-gray-100 shadow-sm ${isSameSenderAsPrev && isSameSenderAsNext ? 'rounded-2xl rounded-bl-sm'
+                        : isSameSenderAsPrev ? 'rounded-2xl rounded-tl-sm rounded-bl-none'
+                          : isSameSenderAsNext ? 'rounded-2xl rounded-bl-sm'
+                            : 'rounded-2xl rounded-bl-none'
+                      }`
+                    }`}
+                  >
+                    <div className="py-2 px-4 text-[15px] leading-relaxed break-words">
+                      {tokenizeText(msg.content).map((token, index) => {
+                        if (token.isUrl) {
+                          return (
+                            <a
+                              key={index}
+                              href={token.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className={`underline break-all ${
+                                isMine
+                                  ? 'text-blue-800 hover:text-blue-900 font-medium'
+                                  : 'text-blue-600 hover:text-blue-700 dark:text-sky-400 dark:hover:text-sky-300 font-medium'
+                              }`}
+                            >
+                              {token.text}
+                            </a>
+                          );
+                        }
+                        return <span key={index}>{token.text}</span>;
+                      })}
+                    </div>
+                    <LinkPreviewCard messageContent={msg.content} isMine={isMine} insideBubble={true} />
+                  </div>
                 ) : (
                   /* Text message */
                   <div
@@ -429,6 +478,24 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                   {formatMessageTime(msg.sendTime)}
                 </span>
               </div>
+
+              {/* Status Indicator for mine */}
+              {isMine && (msg.isLoading || msg.error || isSentNotRead) && (
+                <div 
+                  className="flex items-center justify-center w-4 h-4 flex-shrink-0 self-end mb-1 cursor-default"
+                  title={msg.error || (isSentNotRead ? "Đã gửi" : "Đang gửi")}
+                >
+                  {msg.isLoading && (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin text-gray-400" />
+                  )}
+                  {msg.error && (
+                    <AlertCircle className="h-3.5 w-3.5 text-red-500" />
+                  )}
+                  {isSentNotRead && (
+                    <Check className="h-3.5 w-3.5 text-gray-400" />
+                  )}
+                </div>
+              )}
             </div>
             
             {/* Chat 1-1: Messenger style avatar nhỏ */}
