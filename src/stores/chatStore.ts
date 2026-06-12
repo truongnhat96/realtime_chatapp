@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ConversationItem, MessageItem, ParticipantInfo, LinkPreviewData } from '../types/chat';
+import type { ConversationItem, MessageItem, ParticipantInfo, LinkPreviewData, SystemMessage, GroupInfo } from '../types/chat';
 import { useAuthStore } from './authStore';
 import { convertUtcToLocal } from '../lib/utils';
 
@@ -8,12 +8,50 @@ const normalizeId = (value?: string) => {
   return trimmed ? trimmed : undefined;
 };
 
+const normalizeGroupInfo = (groupInfo?: GroupInfo | null): GroupInfo | null | undefined => {
+  if (!groupInfo) return groupInfo;
+  return {
+    name: groupInfo.name ?? (groupInfo as any).Name ?? '',
+    groupImage: groupInfo.groupImage ?? (groupInfo as any).GroupImage ?? null,
+    groupUrl: groupInfo.groupUrl ?? (groupInfo as any).GroupUrl ?? null,
+    createdBy: groupInfo.createdBy ?? (groupInfo as any).CreatedBy ?? '',
+    memberCount: groupInfo.memberCount ?? (groupInfo as any).MemberCount ?? 0,
+    allowJoinByLink: groupInfo.allowJoinByLink ?? (groupInfo as any).AllowJoinByLink ?? false,
+    allowMembersAdd: groupInfo.allowMembersAdd ?? (groupInfo as any).AllowMembersAdd ?? true,
+  };
+};
+
 const isUnreadBySeenMessage = (seenMessage?: string | null) => {
   if (!seenMessage) return true;
   const normalized = seenMessage.trim();
   if (!normalized) return true;
   if (normalized.startsWith('0001-01-01')) return true;
   return false;
+};
+
+const updateUserCacheHelper = (cache: Record<string, string>, conversations: ConversationItem[]) => {
+  const newCache = { ...cache };
+  for (const conv of conversations) {
+    if (conv.user) {
+      newCache[conv.user.id.toLowerCase()] = conv.user.name;
+    }
+    if (conv.participants) {
+      for (const p of conv.participants) {
+        newCache[p.id.toLowerCase()] = p.name;
+      }
+    }
+  }
+  return newCache;
+};
+
+const sortConversations = (conversations: ConversationItem[]) => {
+  return [...conversations].sort((a, b) => {
+    const timeA = a.timeMessage ? new Date(a.timeMessage).getTime() : 0;
+    const timeB = b.timeMessage ? new Date(b.timeMessage).getTime() : 0;
+    const scoreA = isNaN(timeA) ? 0 : timeA;
+    const scoreB = isNaN(timeB) ? 0 : timeB;
+    return scoreB - scoreA;
+  });
 };
 
 interface TypingUserState {
@@ -30,6 +68,7 @@ interface ChatState {
   typingByConversationId: Record<string, TypingUserState[]>;
   conversationOpenSignal: Record<string, number>;
   linkPreviews: Record<string, LinkPreviewData>;
+  userCache: Record<string, string>;
 
   setConversations: (conversations: ConversationItem[]) => void;
   appendConversations: (conversations: ConversationItem[]) => void;
@@ -39,7 +78,7 @@ interface ChatState {
   setMessages: (conversationId: string, messages: MessageItem[]) => void;
   addMessage: (conversationId: string, message: MessageItem) => void;
   prependMessages: (conversationId: string, messages: MessageItem[]) => void; // for load more
-  updateConversationLastMessage: (conversationId: string, messageText: string, time: string, senderId?: string) => void;
+  updateConversationLastMessage: (conversationId: string, messageText: string, time: string, senderId?: string, messageType?: number, senderName?: string) => void;
   setUserOnlineStatus: (userId: string, isOnline: boolean, lastOnline?: string) => void;
   setUserTyping: (conversationId: string, userId: string, isTyping: boolean, userName?: string) => void;
   clearTypingConversation: (conversationId: string) => void;
@@ -62,9 +101,53 @@ interface ChatState {
   addParticipantsToConversation: (conversationId: string, newMembers: ParticipantInfo[], memberCount: number) => void;
   removeParticipantFromConversation: (conversationId: string, userId: string, memberCount: number) => void;
   updateParticipantRole: (conversationId: string, userId: string, newRole: number) => void;
-  addSystemMessages: (conversationId: string, messages: string[]) => void;
+  addSystemMessages: (conversationId: string, messages: SystemMessage[], content?: string) => void;
+  updateGroupSettings: (conversationId: string, settings: Partial<GroupInfo>) => void;
   setLinkPreview: (url: string, data: LinkPreviewData) => void;
+  updateSingleUserCache: (userId: string, name: string) => void;
 }
+
+const pendingUserFetches = new Set<string>();
+
+export const fetchAndCacheUserProfile = async (userId: string) => {
+  const normalizedId = userId.toLowerCase();
+  if (pendingUserFetches.has(normalizedId)) return;
+  pendingUserFetches.add(normalizedId);
+
+  try {
+    const { chatApi } = await import('../lib/api');
+    const res = await chatApi.getUserProfile(userId);
+    if (res.isSuccess && res.data) {
+      const name = res.data.name || res.data.userName || 'Thành viên';
+      useChatStore.getState().updateSingleUserCache(normalizedId, name);
+    } else {
+      useChatStore.getState().updateSingleUserCache(normalizedId, 'Thành viên');
+    }
+  } catch (error) {
+    console.error('Failed to fetch user profile:', error);
+    useChatStore.getState().updateSingleUserCache(normalizedId, 'Thành viên');
+  } finally {
+    pendingUserFetches.delete(normalizedId);
+  }
+};
+
+export const resolveUserName = (userId: string, conversationId: string, isCapital = false): string => {
+  const currentUserId = useAuthStore.getState().user?.id;
+  if (userId.toLowerCase() === currentUserId?.toLowerCase()) {
+    return isCapital ? 'Bạn' : 'bạn';
+  }
+  const state = useChatStore.getState();
+  const conv = state.conversations.find(c => c.conversationId === conversationId);
+  const member = conv?.participants.find(p => p.id.toLowerCase() === userId.toLowerCase());
+  if (member?.name) return member.name;
+  
+  const cached = state.userCache?.[userId.toLowerCase()];
+  if (cached) return cached;
+
+  void fetchAndCacheUserProfile(userId);
+
+  return isCapital ? 'Thành viên' : 'thành viên';
+};
 
 export const useChatStore = create<ChatState>((set) => ({
   conversations: [],
@@ -74,6 +157,7 @@ export const useChatStore = create<ChatState>((set) => ({
   typingByConversationId: {},
   conversationOpenSignal: {},
   linkPreviews: {},
+  userCache: {},
 
   setConversations: (incomingConversations) => set((state) => {
     const previousById = new Map(state.conversations.map((conv) => [conv.conversationId, conv]));
@@ -82,6 +166,7 @@ export const useChatStore = create<ChatState>((set) => ({
         ...conv,
         timeMessage: convertUtcToLocal(conv.timeMessage),
         seenMessage: convertUtcToLocal(conv.seenMessage),
+        groupInfo: normalizeGroupInfo(conv.groupInfo),
         participants: conv.participants.map(p => ({
           ...p,
           joinedAt: p.joinedAt ? convertUtcToLocal(p.joinedAt) : p.joinedAt,
@@ -102,6 +187,7 @@ export const useChatStore = create<ChatState>((set) => ({
 
       return {
         ...normalizedConv,
+        isRemovedFromGroup: normalizedConv.chatStatusAfterKick === 1 || normalizedConv.isRemovedFromGroup,
         boxChatInfo: {
           lastMessageId: normalizeId(incomingBox?.lastMessageId) || normalizeId(previousBox?.lastMessageId),
           lastMessageSenderId:
@@ -122,7 +208,9 @@ export const useChatStore = create<ChatState>((set) => ({
       };
     });
 
-    return { conversations };
+    const nextCache = updateUserCacheHelper(state.userCache || {}, conversations);
+    const sortedConversations = sortConversations(conversations);
+    return { conversations: sortedConversations, userCache: nextCache };
   }),
 
   appendConversations: (newConversations) => set((state) => {
@@ -132,6 +220,7 @@ export const useChatStore = create<ChatState>((set) => ({
         ...conv,
         timeMessage: convertUtcToLocal(conv.timeMessage),
         seenMessage: convertUtcToLocal(conv.seenMessage),
+        groupInfo: normalizeGroupInfo(conv.groupInfo),
         participants: conv.participants.map(p => ({
           ...p,
           joinedAt: p.joinedAt ? convertUtcToLocal(p.joinedAt) : p.joinedAt,
@@ -152,6 +241,7 @@ export const useChatStore = create<ChatState>((set) => ({
 
       return {
         ...normalizedConv,
+        isRemovedFromGroup: normalizedConv.chatStatusAfterKick === 1 || normalizedConv.isRemovedFromGroup,
         boxChatInfo: {
           lastMessageId: normalizeId(incomingBox?.lastMessageId) || normalizeId(existingBox?.lastMessageId),
           lastMessageSenderId:
@@ -174,15 +264,46 @@ export const useChatStore = create<ChatState>((set) => ({
 
     const existingIds = new Set(state.conversations.map((c) => c.conversationId));
     const filtered = mergedIncoming.filter((c) => !existingIds.has(c.conversationId));
-    return { conversations: [...state.conversations, ...filtered] };
+    const nextConversations = [...state.conversations, ...filtered];
+    const nextCache = updateUserCacheHelper(state.userCache || {}, nextConversations);
+    const sortedConversations = sortConversations(nextConversations);
+    return { conversations: sortedConversations, userCache: nextCache };
   }),
 
   addConversation: (conv) => set((state) => {
-    if (state.conversations.some(c => c.conversationId === conv.conversationId)) return state;
+    const existingIndex = state.conversations.findIndex(c => c.conversationId === conv.conversationId);
+    if (existingIndex !== -1) {
+      const existingConv = state.conversations[existingIndex];
+      if (existingConv.isRemovedFromGroup) {
+        const updatedConv = {
+          ...existingConv,
+          isRemovedFromGroup: false,
+          participants: conv.participants.length > 0 ? conv.participants.map(p => ({
+            ...p,
+            joinedAt: p.joinedAt ? convertUtcToLocal(p.joinedAt) : p.joinedAt,
+            lastReadAt: p.lastReadAt ? convertUtcToLocal(p.lastReadAt) : p.lastReadAt,
+            lastOnline: p.lastOnline ? convertUtcToLocal(p.lastOnline) : p.lastOnline,
+          })) : existingConv.participants,
+          groupInfo: normalizeGroupInfo(conv.groupInfo || existingConv.groupInfo),
+          message: conv.message || existingConv.message,
+          messageType: conv.messageType !== undefined ? conv.messageType : existingConv.messageType,
+          timeMessage: conv.timeMessage ? convertUtcToLocal(conv.timeMessage) : existingConv.timeMessage,
+          seenMessage: conv.seenMessage ? convertUtcToLocal(conv.seenMessage) : existingConv.seenMessage,
+          systemMessages: conv.systemMessages || existingConv.systemMessages,
+        };
+        const nextConversations = state.conversations.map((c, idx) => idx === existingIndex ? updatedConv : c);
+        const nextCache = updateUserCacheHelper(state.userCache || {}, nextConversations);
+        const sortedConversations = sortConversations(nextConversations);
+        return { conversations: sortedConversations, userCache: nextCache };
+      }
+      return state;
+    }
+
     const normalizedConv = {
       ...conv,
       timeMessage: convertUtcToLocal(conv.timeMessage),
       seenMessage: convertUtcToLocal(conv.seenMessage),
+      groupInfo: normalizeGroupInfo(conv.groupInfo),
       participants: conv.participants.map(p => ({
         ...p,
         joinedAt: p.joinedAt ? convertUtcToLocal(p.joinedAt) : p.joinedAt,
@@ -194,7 +315,10 @@ export const useChatStore = create<ChatState>((set) => ({
         lastOnline: conv.user.lastOnline ? convertUtcToLocal(conv.user.lastOnline) : conv.user.lastOnline,
       } : conv.user
     };
-    return { conversations: [normalizedConv, ...state.conversations] };
+    const nextConversations = [normalizedConv, ...state.conversations];
+    const nextCache = updateUserCacheHelper(state.userCache || {}, nextConversations);
+    const sortedConversations = sortConversations(nextConversations);
+    return { conversations: sortedConversations, userCache: nextCache };
   }),
 
   openConversation: (conversationId) => set((state) => ({
@@ -218,6 +342,11 @@ export const useChatStore = create<ChatState>((set) => ({
   })),
 
   addMessage: (conversationId, message) => set((state) => {
+    const conv = state.conversations.find(c => c.conversationId === conversationId);
+    if (conv?.isRemovedFromGroup) {
+      return state;
+    }
+
     const existingMsgs = state.messages[conversationId] || [];
     // Ensure no duplicates using message.id
     if (existingMsgs.some(m => m.id === message.id)) {
@@ -263,8 +392,11 @@ export const useChatStore = create<ChatState>((set) => ({
             ...c,
             isUnread: true,
             message: normalizedMsg.content,
+            messageType: normalizedMsg.messageType,
+            lastMessageSenderName: normalizedMsg.senderName || c.lastMessageSenderName,
             timeMessage: normalizedMsg.sendTime,
             lastMessageSenderId: normalizedMsg.fromUserId,
+            systemMessages: normalizedMsg.messageType === 4 ? normalizedMsg.systemMessages : undefined,
             boxChatInfo: {
               ...c.boxChatInfo,
               lastMessageId: normalizedMsg.id,
@@ -281,8 +413,11 @@ export const useChatStore = create<ChatState>((set) => ({
           ? {
             ...c,
             message: normalizedMsg.content,
+            messageType: normalizedMsg.messageType,
+            lastMessageSenderName: normalizedMsg.senderName || c.lastMessageSenderName,
             timeMessage: normalizedMsg.sendTime,
             lastMessageSenderId: normalizedMsg.fromUserId,
+            systemMessages: normalizedMsg.messageType === 4 ? normalizedMsg.systemMessages : undefined,
             boxChatInfo: {
               ...c.boxChatInfo,
               lastMessageId: normalizedMsg.id,
@@ -293,12 +428,13 @@ export const useChatStore = create<ChatState>((set) => ({
       );
     }
 
+    const sortedConversations = sortConversations(updatedConversations);
     return {
       messages: {
         ...state.messages,
         [conversationId]: [...existingMsgs, normalizedMsg]
       },
-      conversations: updatedConversations
+      conversations: sortedConversations
     };
   }),
 
@@ -316,16 +452,24 @@ export const useChatStore = create<ChatState>((set) => ({
     };
   }),
 
-  updateConversationLastMessage: (conversationId, messageText, time, senderId) => set((state) => {
+  updateConversationLastMessage: (conversationId, messageText, time, senderId, messageType, senderName) => set((state) => {
+    const conv = state.conversations.find(c => c.conversationId === conversationId);
+    if (conv?.isRemovedFromGroup) {
+      return state;
+    }
     const localTime = convertUtcToLocal(time);
     const updatedConversations = state.conversations.map(c => {
       if (c.conversationId === conversationId) {
+        const isSys = messageType === 4;
         return {
           ...c,
-          message: messageText,
+          message: isSys ? '' : messageText,
+          messageType: messageType !== undefined ? messageType : c.messageType,
+          lastMessageSenderName: senderName || c.lastMessageSenderName,
           timeMessage: localTime,
           seenMessage: localTime,
           lastMessageSenderId: senderId || c.lastMessageSenderId,
+          systemMessages: isSys ? c.systemMessages : undefined,
           boxChatInfo: {
             ...c.boxChatInfo,
             lastMessageSenderId: senderId || c.boxChatInfo?.lastMessageSenderId || c.lastMessageSenderId,
@@ -335,10 +479,8 @@ export const useChatStore = create<ChatState>((set) => ({
       return c;
     });
 
-    // Optionally sort conversations by time
-    updatedConversations.sort((a, b) => new Date(b.timeMessage).getTime() - new Date(a.timeMessage).getTime());
-
-    return { conversations: updatedConversations };
+    const sortedConversations = sortConversations(updatedConversations);
+    return { conversations: sortedConversations };
   }),
 
   setUserOnlineStatus: (userId, isOnline, lastOnline) => set((state) => {
@@ -622,30 +764,44 @@ export const useChatStore = create<ChatState>((set) => ({
     )
   })),
 
-  updateConversationParticipants: (conversationId, participants, memberCount) => set((state) => ({
-    conversations: state.conversations.map(c =>
-      c.conversationId === conversationId
-        ? {
-          ...c,
-          participants,
-          groupInfo: c.groupInfo ? { ...c.groupInfo, memberCount } : c.groupInfo,
-        }
-        : c
-    )
-  })),
+  updateConversationParticipants: (conversationId, participants, memberCount) => set((state) => {
+    const nextCache = { ...(state.userCache || {}) };
+    for (const p of participants) {
+      nextCache[p.id.toLowerCase()] = p.name;
+    }
+    return {
+      conversations: state.conversations.map(c =>
+        c.conversationId === conversationId
+          ? {
+            ...c,
+            participants,
+            groupInfo: c.groupInfo ? { ...c.groupInfo, memberCount } : c.groupInfo,
+          }
+          : c
+      ),
+      userCache: nextCache,
+    };
+  }),
 
-  addParticipantsToConversation: (conversationId, newMembers, memberCount) => set((state) => ({
-    conversations: state.conversations.map(c => {
-      if (c.conversationId !== conversationId) return c;
-      const existingIds = new Set(c.participants.map(p => p.id));
-      const uniqueNew = newMembers.filter(m => !existingIds.has(m.id));
-      return {
-        ...c,
-        participants: [...c.participants, ...uniqueNew],
-        groupInfo: c.groupInfo ? { ...c.groupInfo, memberCount } : c.groupInfo,
-      };
-    })
-  })),
+  addParticipantsToConversation: (conversationId, newMembers, memberCount) => set((state) => {
+    const nextCache = { ...(state.userCache || {}) };
+    for (const p of newMembers) {
+      nextCache[p.id.toLowerCase()] = p.name;
+    }
+    return {
+      conversations: state.conversations.map(c => {
+        if (c.conversationId !== conversationId) return c;
+        const existingIds = new Set(c.participants.map(p => p.id));
+        const uniqueNew = newMembers.filter(m => !existingIds.has(m.id));
+        return {
+          ...c,
+          participants: [...c.participants, ...uniqueNew],
+          groupInfo: c.groupInfo ? { ...c.groupInfo, memberCount } : c.groupInfo,
+        };
+      }),
+      userCache: nextCache,
+    };
+  }),
 
   removeParticipantFromConversation: (conversationId, userId, memberCount) => set((state) => ({
     conversations: state.conversations.map(c => {
@@ -670,22 +826,61 @@ export const useChatStore = create<ChatState>((set) => ({
     })
   })),
 
-  addSystemMessages: (conversationId, systemMsgs) => set((state) => {
+  addSystemMessages: (conversationId, systemMsgs, content = '') => set((state) => {
     const existingMsgs = state.messages[conversationId] || [];
-    const fakeMessages: MessageItem[] = systemMsgs.map((content) => ({
+    const lastSm = systemMsgs[systemMsgs.length - 1];
+    const lastSmTime = convertUtcToLocal(lastSm?.createdAt || new Date().toISOString());
+
+    const newMsg: MessageItem = {
       id: crypto.randomUUID(),
       content,
-      sendTime: convertUtcToLocal(new Date().toISOString()),
+      sendTime: lastSmTime,
       fromUserId: 'system',
       messageType: 4,
-    }));
+      systemMessages: systemMsgs,
+    };
+
+    const isNotActive = state.activeConversationId !== conversationId;
+
+    const updatedConversations = state.conversations.map(c => {
+      if (c.conversationId !== conversationId) return c;
+      return {
+        ...c,
+        message: content,
+        messageType: 4,
+        timeMessage: lastSmTime,
+        systemMessages: systemMsgs,
+        ...(isNotActive ? {
+          isUnread: true,
+          boxChatInfo: {
+            ...c.boxChatInfo,
+            unreadCount: (c.boxChatInfo?.unreadCount ?? 0) + 1,
+          },
+        } : {}),
+      };
+    });
+
+    const sortedConversations = sortConversations(updatedConversations);
+
     return {
       messages: {
         ...state.messages,
-        [conversationId]: [...existingMsgs, ...fakeMessages]
-      }
+        [conversationId]: [...existingMsgs, newMsg]
+      },
+      conversations: sortedConversations,
     };
   }),
+
+  updateGroupSettings: (conversationId, settings) => set((state) => ({
+    conversations: state.conversations.map(c =>
+      c.conversationId === conversationId
+        ? {
+            ...c,
+            groupInfo: c.groupInfo ? normalizeGroupInfo({ ...c.groupInfo, ...settings }) : normalizeGroupInfo(settings as GroupInfo)
+          }
+        : c
+    )
+  })),
 
   // === Media Message Actions ===
 
@@ -742,6 +937,12 @@ export const useChatStore = create<ChatState>((set) => ({
     linkPreviews: {
       ...state.linkPreviews,
       [url]: data
+    }
+  })),
+  updateSingleUserCache: (userId, name) => set((state) => ({
+    userCache: {
+      ...state.userCache,
+      [userId.toLowerCase()]: name
     }
   })),
 }));

@@ -61,7 +61,7 @@ export function useMediaUpload({ conversationId, stopTyping }: UseMediaUploadPar
         batchId, batchOrder: imageBatchOrder,
       });
       const previewText = images.length === 1 ? '[Hình ảnh]' : `[${images.length} Hình ảnh]`;
-      store.updateConversationLastMessage(conversationId, previewText, sendTime, currentUserId);
+      store.updateConversationLastMessage(conversationId, previewText, sendTime, currentUserId, 1, useAuthStore.getState().user?.name);
     }
 
     // 1.5. Tạo danh sách chờ cho video/file (Đảm bảo batchOrder được gán SAU ảnh)
@@ -82,7 +82,7 @@ export function useMediaUpload({ conversationId, stopTyping }: UseMediaUploadPar
         batchId, batchOrder: item.batchOrder,
       });
       const previewText = item.messageType === 2 ? '[Video]' : `[File] ${item.file.name}`;
-      store.updateConversationLastMessage(conversationId, previewText, sendTime, currentUserId);
+      store.updateConversationLastMessage(conversationId, previewText, sendTime, currentUserId, item.messageType, useAuthStore.getState().user?.name);
     }
 
     stopTyping();

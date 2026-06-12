@@ -112,3 +112,93 @@ export function useLastOnline(
 
   return label;
 }
+
+function computeMessageTimeLabel(timeStr: string): [string, number] {
+  const timeMs = new Date(timeStr).getTime();
+  if (isNaN(timeMs)) return ['', 0];
+
+  const diffMs = Date.now() - timeMs;
+  if (diffMs < 0) return ['Vừa xong', 60_000];
+
+  const MINUTE = 60_000;
+  const HOUR = 3_600_000;
+  const DAY = 86_400_000;
+  const MONTH = 30 * DAY;
+
+  if (diffMs < MINUTE) {
+    return ['Vừa xong', MINUTE - diffMs];
+  }
+
+  if (diffMs < HOUR) {
+    const minutes = Math.floor(diffMs / MINUTE);
+    return [`${minutes} phút`, MINUTE];
+  }
+
+  if (diffMs < DAY) {
+    const hours = Math.floor(diffMs / HOUR);
+    return [`${hours} giờ`, HOUR];
+  }
+
+  if (diffMs < MONTH) {
+    const days = Math.floor(diffMs / DAY);
+    return [`${days} ngày`, DAY];
+  }
+
+  // > 30 ngày: trả về DD-MM
+  const match = timeStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (match) {
+    const [, , month, day] = match;
+    return [`${day}-${month}`, 0];
+  }
+  const date = new Date(timeStr);
+  const formatted = date.toLocaleDateString([], { day: '2-digit', month: '2-digit' }).replace(/\//g, '-');
+  return [formatted, 0];
+}
+
+export function useMessageTime(timeStr: string | null | undefined): string {
+  const [label, setLabel] = useState<string>(() => {
+    if (!timeStr) return '';
+    return computeMessageTimeLabel(timeStr)[0];
+  });
+
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (timerRef.current !== null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+
+    if (!timeStr) {
+      setLabel('');
+      return;
+    }
+
+    const [initialLabel, initialDelay] = computeMessageTimeLabel(timeStr);
+    setLabel(initialLabel);
+
+    if (initialDelay === 0) return;
+
+    const tick = () => {
+      const [newLabel, nextDelay] = computeMessageTimeLabel(timeStr);
+      setLabel(newLabel);
+
+      if (nextDelay > 0) {
+        timerRef.current = setTimeout(tick, nextDelay);
+      } else {
+        timerRef.current = null;
+      }
+    };
+
+    timerRef.current = setTimeout(tick, initialDelay);
+
+    return () => {
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [timeStr]);
+
+  return label;
+}

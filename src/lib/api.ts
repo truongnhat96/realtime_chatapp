@@ -21,7 +21,10 @@ import type {
   GetMembersResponse,
   LinkPreviewResponse,
   FetchConversationMediaResponse,
-  FetchConversationLinksResponse
+  FetchConversationLinksResponse,
+  MarkConversationAsDeletedLocallyResponse,
+  UpdateAllowMembersAddResponse,
+  UpdateAllowJoinByLinkResponse
 } from '../types/chat';
 
 export const chatApi = {
@@ -107,7 +110,7 @@ export const chatApi = {
   addParticipant: (conversationId: string, userIds: string[]) => {
     return axiosInstance.post<never, AddParticipantResponse>('/conversation/add-participant', {
       conversationId,
-      userIds
+      userIds,
     });
   },
 
@@ -129,9 +132,8 @@ export const chatApi = {
   },
 
   // Tham gia nhóm qua link
-  joinGroupByLink: (conversationId: string, userId: string, boxChatLink: string) => {
+  joinGroupByLink: (userId: string, boxChatLink: string) => {
     return axiosInstance.post<never, JoinGroupResponse>('/conversation/join', {
-      conversationId,
       userId,
       boxChatLink
     });
@@ -140,6 +142,36 @@ export const chatApi = {
   // Load danh sách thành viên nhóm
   getConversationMembers: (conversationId: string) => {
     return axiosInstance.get<never, GetMembersResponse>(`/conversation/${conversationId}/members`);
+  },
+
+  // Cập nhật trạng thái cho phép thành viên thêm người
+  updateAllowMembersAdd: (conversationId: string, allowMembersAdd: boolean): Promise<UpdateAllowMembersAddResponse> => {
+    return axiosInstance.post<never, UpdateAllowMembersAddResponse>('/conversation/update-status-allow-member-add', {
+      conversationId,
+      allowMembersAdd,
+      ConversationId: conversationId,
+      AllowMembersAdd: allowMembersAdd
+    });
+  },
+
+  // Cập nhật trạng thái cho phép tham gia bằng link
+  updateAllowJoinByLink: (conversationId: string, allowJoinByLink: boolean): Promise<UpdateAllowJoinByLinkResponse> => {
+    return axiosInstance.post<never, UpdateAllowJoinByLinkResponse>('/conversation/update-status-allow-join-by-link', {
+      conversationId,
+      allowJoinByLink,
+      ConversationId: conversationId,
+      AllowJoinByLink: allowJoinByLink
+    });
+  },
+
+  // Đánh dấu đã xóa đoạn chat trống sau khi bị kick (để không load lại nữa)
+  markConversationAsDeletedLocally: (conversationId: string, userId: string): Promise<MarkConversationAsDeletedLocallyResponse> => {
+    return axiosInstance.post<never, MarkConversationAsDeletedLocallyResponse>('/conversation/mark-deleted-local', {
+      conversationId,
+      userId,
+      ConversationId: conversationId,
+      UserId: userId
+    });
   },
 
   // Upload 1 file media lên server (POST /upload-media)

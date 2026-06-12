@@ -29,6 +29,35 @@ const useChatHub = () => {
   const accessToken = useAuthStore(state => state.accessToken);
   const expiresAt = useAuthStore(state => state.expiresAt);
   const hasHydrated = useAuthStore(state => state.hasHydrated);
+  const conversations = useChatStore(state => state.conversations);
+  const joinedConversationIdsRef = useRef<Set<string>>(new Set());
+
+  // Tự động join SignalR group cho tất cả box chat trong store
+  useEffect(() => {
+    if (!isConnected || !connectionRef.current) return;
+
+    const connection = connectionRef.current;
+    for (const conv of conversations) {
+      if (conv.isRemovedFromGroup) {
+        continue;
+      }
+      if (!joinedConversationIdsRef.current.has(conv.conversationId)) {
+        joinedConversationIdsRef.current.add(conv.conversationId);
+        void connection.invoke('JoinConversation', conv.conversationId)
+          .catch((err) => {
+            console.error('Failed to auto join conversation SignalR group:', err);
+            joinedConversationIdsRef.current.delete(conv.conversationId);
+          });
+      }
+    }
+  }, [conversations, isConnected]);
+
+  // Reset khi mất kết nối để có thể join lại khi reconnect
+  useEffect(() => {
+    if (!isConnected) {
+      joinedConversationIdsRef.current.clear();
+    }
+  }, [isConnected]);
   useEffect(() => {
     if (!hasHydrated || !accessToken || (expiresAt && expiresAt < Date.now())) return;
 
@@ -48,6 +77,8 @@ const useChatHub = () => {
       previousConnection.off('RemovedFromGroup');
       previousConnection.off('MemberRemoved');
       previousConnection.off('MemberLeft');
+      previousConnection.off('AllowMemberAddUpdated');
+      previousConnection.off('AllowJoinByLinkUpdated');
       if (previousConnection.state !== 'Disconnected') {
         previousConnection.stop().catch(() => undefined);
       }
@@ -78,6 +109,12 @@ const useChatHub = () => {
       const activeConversationId = useChatStore.getState().activeConversationId;
 
       if (!conversationId || !serverMessageId || !msgFromUserId || !msgContent) {
+        return;
+      }
+
+      const currentConversations = useChatStore.getState().conversations;
+      const existingConv = currentConversations.find(c => c.conversationId === conversationId);
+      if (existingConv?.isRemovedFromGroup) {
         return;
       }
 
@@ -116,7 +153,6 @@ const useChatHub = () => {
         useChatStore.getState().setUserTyping(conversationId, msgFromUserId, false);
       }
 
-      const currentConversations = useChatStore.getState().conversations;
       const conversationExists = currentConversations.some(c => c.conversationId === conversationId);
 
       let senderName = msgSenderName || "";
@@ -168,7 +204,7 @@ const useChatHub = () => {
             senderName = senderName || "Thành viên nhóm";
           }
         }
-        useChatStore.getState().updateConversationLastMessage(conversationId, msgContent, msgSendTime || '', msgFromUserId);
+        useChatStore.getState().updateConversationLastMessage(conversationId, msgContent, msgSendTime || '', msgFromUserId, msgMessageType, senderName);
       }
 
       if (msgFromUserId && msgFromUserId.toLowerCase() !== currentUserId?.toLowerCase()) {
@@ -249,11 +285,12 @@ const useChatHub = () => {
         user: null,
         participants: data.participants || [],
         groupInfo: data.groupInfo,
-        message: data.systemMessages?.[0] || '',
+        message: '',
         messageType: 4,
         seenMessage: '',
         timeMessage: new Date().toISOString(),
         boxChatInfo: { unreadCount: 1 },
+        systemMessages: data.systemMessages,
       });
 
       if (data.systemMessages?.length) {
@@ -266,7 +303,8 @@ const useChatHub = () => {
 
     const onAddedToGroup = (data: AddedToGroupEvent) => {
       const store = useChatStore.getState();
-      if (store.conversations.some(c => c.conversationId === data.conversationId)) return;
+      const existing = store.conversations.find(c => c.conversationId === data.conversationId);
+      if (existing && !existing.isRemovedFromGroup) return;
 
       store.addConversation({
         conversationId: data.conversationId,
@@ -274,11 +312,12 @@ const useChatHub = () => {
         user: null,
         participants: data.participants || [],
         groupInfo: data.groupInfo,
-        message: data.systemMessages?.[0] || '',
+        message: '',
         messageType: 4,
         seenMessage: '',
         timeMessage: new Date().toISOString(),
         boxChatInfo: { unreadCount: 1 },
+        systemMessages: data.systemMessages,
       });
 
       if (data.systemMessages?.length) {
@@ -312,8 +351,17 @@ const useChatHub = () => {
       const store = useChatStore.getState();
       // Đánh dấu conversation là bị xóa (không xóa hẳn để user vẫn thấy đoạn chat)
       store.markConversationAsRemoved(data.conversationId);
-      // Thêm system message tạm thời
-      store.addSystemMessages(data.conversationId, ['Bạn đã bị xóa khỏi nhóm']);
+      // Thêm system message cho người bị xóa
+      if (data.systemMessages?.length) {
+        store.addSystemMessages(data.conversationId, data.systemMessages);
+      } else {
+        const currentUserId = useAuthStore.getState().user?.id || '';
+        store.addSystemMessages(data.conversationId, [{
+          type: 4, // KickMember
+          actionUserId: data.removedByUserId,
+          targetUserId: currentUserId,
+        }]);
+      }
       // Rời SignalR group
       void connection.invoke('LeaveConversation', data.conversationId).catch(console.error);
     };
@@ -340,12 +388,45 @@ const useChatHub = () => {
       }
     };
 
+    const onAllowMemberAddUpdated = (data: any) => {
+      const conversationId = data.conversationId ?? data.ConversationId;
+      const allowMemberAdd = data.allowMemberAdd ?? data.AllowMemberAdd;
+      const systemMessages = data.systemMessages ?? data.SystemMessages;
+
+      const store = useChatStore.getState();
+      store.updateGroupSettings(conversationId, { allowMembersAdd: !!allowMemberAdd });
+      if (systemMessages?.length) {
+        store.addSystemMessages(conversationId, systemMessages, allowMemberAdd ? 'true' : 'false');
+      }
+    };
+
+    const onAllowJoinByLinkUpdated = (data: any) => {
+      const conversationId = data.conversationId ?? data.ConversationId;
+      const allowJoinByLink = data.allowJoinByLink ?? data.AllowJoinByLink;
+      const groupLink = data.groupLink ?? data.GroupLink;
+      const systemMessages = data.systemMessages ?? data.SystemMessages;
+
+      const store = useChatStore.getState();
+      store.updateGroupSettings(conversationId, {
+        allowJoinByLink: !!allowJoinByLink,
+        groupUrl: groupLink || null,
+      });
+      if (systemMessages?.length) {
+        store.addSystemMessages(conversationId, systemMessages, allowJoinByLink ? 'true' : 'false');
+      }
+    };
+
     // === ReceiveMediaMessage ===
     const onReceiveMediaMessage = (msg: SignalRMediaMessageReceive) => {
       const currentUserId = useAuthStore.getState().user?.id;
       const conversationId = msg.conversationId;
-
       if (!conversationId || !msg.id || !msg.fromUserId) return;
+
+      const currentConversations = useChatStore.getState().conversations;
+      const existingConv = currentConversations.find(c => c.conversationId === conversationId);
+      if (existingConv?.isRemovedFromGroup) {
+        return;
+      }
 
       // Tin nhắn media từ chính mình → bỏ qua vì client đã tự tạo tin nhắn tạm
       // và sẽ finalize qua mediaMessageId từ API response
@@ -379,7 +460,7 @@ const useChatHub = () => {
         : msg.messageType === 2 ? '[Video]'
           : `[File] ${attachments[0]?.fileName || msg.fileName}`;
       useChatStore.getState().updateConversationLastMessage(
-        conversationId, previewText, localSendTime, msg.fromUserId
+        conversationId, previewText, localSendTime, msg.fromUserId, msg.messageType, msg.senderName
       );
 
       // Toast cho tin nhắn media nếu không đang mở conversation
@@ -423,6 +504,8 @@ const useChatHub = () => {
     connection.on("RemovedFromGroup", onRemovedFromGroup);
     connection.on("MemberRemoved", onMemberRemoved);
     connection.on("MemberLeft", onMemberLeft);
+    connection.on("AllowMemberAddUpdated", onAllowMemberAddUpdated);
+    connection.on("AllowJoinByLinkUpdated", onAllowJoinByLinkUpdated);
 
     let isMounted = true;
     let startTimer: ReturnType<typeof setTimeout>;
@@ -496,6 +579,8 @@ const useChatHub = () => {
       connection.off('RemovedFromGroup', onRemovedFromGroup);
       connection.off('MemberRemoved', onMemberRemoved);
       connection.off('MemberLeft', onMemberLeft);
+      connection.off('AllowMemberAddUpdated', onAllowMemberAddUpdated);
+      connection.off('AllowJoinByLinkUpdated', onAllowJoinByLinkUpdated);
       if (connection.state !== 'Disconnected') {
         connection.stop().then(() => {
           setIsConnected(false);
@@ -548,7 +633,7 @@ const useChatHub = () => {
           messageType: msgType,
           isLoading: true,
         });
-        useChatStore.getState().updateConversationLastMessage(conversationId, content, payload.sendTime, currentUserId);
+        useChatStore.getState().updateConversationLastMessage(conversationId, content, payload.sendTime, currentUserId, msgType, useAuthStore.getState().user?.name);
       }
 
       try {

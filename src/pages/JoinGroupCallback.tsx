@@ -33,12 +33,31 @@ export default function JoinGroupCallback() {
 
       try {
         // conversationId sẽ được server tự tìm qua boxChatLink
-        const res = await chatApi.joinGroupByLink('', currentUserId, fullLink);
+        const res = await chatApi.joinGroupByLink(currentUserId, fullLink);
+        console.log(res)
         if (res.isSuccess && res.data) {
           const { conversationId } = res.data;
 
           if (res.data.joinedMember) {
-            // Đã join thành công, mở conversation
+            // Đã join thành công → thêm conversation vào store với system messages
+            if (res.data.groupInfo) {
+              useChatStore.getState().addConversation({
+                conversationId,
+                type: 1,
+                user: null,
+                participants: [],
+                groupInfo: res.data.groupInfo,
+                message: '',
+                messageType: 4,
+                seenMessage: '',
+                timeMessage: new Date().toISOString(),
+                boxChatInfo: { unreadCount: 0 },
+                systemMessages: res.data.systemMessages,
+              });
+            }
+            if (res.data.systemMessages?.length) {
+              useChatStore.getState().addSystemMessages(conversationId, res.data.systemMessages);
+            }
             openConversation(conversationId);
           } else {
             // Đã là thành viên rồi, chỉ cần redirect

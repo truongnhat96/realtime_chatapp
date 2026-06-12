@@ -15,6 +15,7 @@ interface Props {
   error?: string;
   isMine: boolean;
   onImageClick?: (index: number) => void;
+  formattedTime?: string;
 }
 
 /** Format file size cho hiển thị */
@@ -26,7 +27,8 @@ const formatFileSize = (bytes: number): string => {
 
 export default function MediaMessageBubble({
   messageType, url, localObjectUrl, fileName, fileSize,
-  attachments, isLoading, error, isMine, onImageClick
+  attachments, isLoading, error, isMine, onImageClick,
+  formattedTime
 }: Props) {
   const [isPlaying, setIsPlaying] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -98,13 +100,20 @@ export default function MediaMessageBubble({
     // Nếu có attachments array → dùng MessageAttachments (grid layout)
     if (attachments && attachments.length > 0) {
       return (
-        <MessageAttachments
-          attachments={attachments}
-          isLoading={isLoading}
-          progress={undefined}
-          error={error}
-          onImageClick={onImageClick}
-        />
+        <div className="flex flex-col">
+          <MessageAttachments
+            attachments={attachments}
+            isLoading={isLoading}
+            progress={undefined}
+            error={error}
+            onImageClick={onImageClick}
+          />
+          {formattedTime && (
+            <div className={`text-[10px] text-gray-400 select-none mt-1 ${isMine ? 'text-right pr-1' : 'text-left pl-1'}`}>
+              {formattedTime}
+            </div>
+          )}
+        </div>
       );
     }
 
@@ -130,6 +139,11 @@ export default function MediaMessageBubble({
             </div>
           )}
         </div>
+        {formattedTime && (
+          <div className={`text-[10px] text-gray-400 select-none mt-1 ${isMine ? 'text-right pr-1' : 'text-left pl-1'}`}>
+            {formattedTime}
+          </div>
+        )}
         {error && (
           <span className="text-xs text-red-500 mt-1">{error}</span>
         )}
@@ -186,6 +200,11 @@ export default function MediaMessageBubble({
             </div>
           )}
         </div>
+        {formattedTime && (
+          <div className={`text-[10px] text-gray-400 select-none mt-1 ${isMine ? 'text-right pr-1' : 'text-left pl-1'}`}>
+            {formattedTime}
+          </div>
+        )}
         {error && (
           <span className="text-xs text-red-500 mt-1">{error}</span>
         )}
@@ -214,11 +233,18 @@ export default function MediaMessageBubble({
             }`}>
             {displayFileName || 'File'}
           </p>
-          {typeof displayFileSize === 'number' && (
-            <p className={`text-[11px] ${isMine ? 'text-gray-700' : 'text-gray-500 dark:text-gray-400'}`}>
-              {formatFileSize(displayFileSize)}
-            </p>
-          )}
+          <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+            {typeof displayFileSize === 'number' && (
+              <span className={`text-[11px] ${isMine ? 'text-gray-700' : 'text-gray-500 dark:text-gray-400'}`}>
+                {formatFileSize(displayFileSize)}
+              </span>
+            )}
+            {formattedTime && (
+              <span className={`text-[11px] select-none ${isMine ? 'text-gray-700/80' : 'text-gray-500/80 dark:text-gray-400/80'}`}>
+                {typeof displayFileSize === 'number' ? `• ${formattedTime}` : formattedTime}
+              </span>
+            )}
+          </div>
         </div>
         {!isLoading && mediaSrc && (
           <a

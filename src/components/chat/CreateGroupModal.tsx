@@ -79,6 +79,15 @@ export default function CreateGroupModal({ onClose, onGroupCreated, addToConvers
       if (isAddMode && addToConversationId) {
         const res = await chatApi.addParticipant(addToConversationId, Array.from(selectedIds));
         if (res.isSuccess) {
+          // Cập nhật participants và system messages vào store
+          if (res.data.addedMembers?.length) {
+            useChatStore.getState().addParticipantsToConversation(
+              addToConversationId, res.data.addedMembers, res.data.memberCount
+            );
+          }
+          if (res.data.systemMessages?.length) {
+            useChatStore.getState().addSystemMessages(addToConversationId, res.data.systemMessages);
+          }
           onGroupCreated(addToConversationId);
           onClose();
         }
@@ -95,12 +104,16 @@ export default function CreateGroupModal({ onClose, onGroupCreated, addToConvers
             user: null,
             participants: res.data.participants || [],
             groupInfo: res.data.groupInfo,
-            message: 'Bạn đã tạo nhóm.',
+            message: '',
             messageType: 4,
             seenMessage: '',
             timeMessage: new Date().toISOString(),
             boxChatInfo: { unreadCount: 0 },
+            systemMessages: res.data.systemMessages,
           });
+          if (res.data.systemMessages?.length) {
+            useChatStore.getState().addSystemMessages(res.data.conversationId, res.data.systemMessages);
+          }
           onGroupCreated(res.data.conversationId);
           onClose();
         }
@@ -187,11 +200,10 @@ export default function CreateGroupModal({ onClose, onGroupCreated, addToConvers
               <div
                 key={user.id}
                 onClick={() => toggleUser(user.id)}
-                className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all mb-1 ${
-                  isSelected
+                className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all mb-1 ${isSelected
                     ? 'bg-[#8ED8ED]/15 dark:bg-[#8ED8ED]/10'
                     : 'hover:bg-gray-100 dark:hover:bg-[#2C2C2C]'
-                }`}
+                  }`}
               >
                 <img
                   src={user.urlAvatar || '/default-avatar.png'}
@@ -201,11 +213,10 @@ export default function CreateGroupModal({ onClose, onGroupCreated, addToConvers
                 <span className="flex-1 text-sm font-medium text-gray-900 dark:text-white truncate">
                   {user.name}
                 </span>
-                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
-                  isSelected
+                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors flex-shrink-0 ${isSelected
                     ? 'bg-[#8ED8ED] border-[#8ED8ED]'
                     : 'border-gray-300 dark:border-gray-600'
-                }`}>
+                  }`}>
                   {isSelected && (
                     <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />

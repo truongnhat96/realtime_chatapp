@@ -28,6 +28,8 @@ export interface GroupInfo {
   groupUrl: string | null;
   createdBy: string;
   memberCount: number;
+  allowJoinByLink?: boolean;
+  allowMembersAdd?: boolean;
 }
 
 export interface BoxChatInfo {
@@ -51,6 +53,8 @@ export interface ConversationItem {
   boxChatInfo?: BoxChatInfo;
   isUnread?: boolean; // Tự thêm để quản lý trạng thái highlight blue dot
   isRemovedFromGroup?: boolean; // Đánh dấu user đã bị xóa khỏi nhóm (vẫn giữ conversation để xem lại)
+  chatStatusAfterKick?: number; // 0=None, 1=Kicked, 2=RemovedChatHistory
+  systemMessages?: SystemMessage[];
   // Legacy fields kept for backward compatibility while server rollout completes.
   lastReadMessageId?: string;
   lastMessageSenderId?: string;
@@ -73,6 +77,7 @@ export interface MessageItem {
   messageType: number; // 0=Text, 1=Image, 2=Video, 3=File, 4=System
   readBy?: string[];
   isSeen?: boolean; // Đã được đối phương xem chưa
+  systemMessages?: SystemMessage[];
   // Media fields (multi-file)
   attachments?: Attachment[];
   // Legacy single-file fields (backward compat)
@@ -200,6 +205,7 @@ export interface CreateGroupResponse {
     groupInfo: GroupInfo;
     participants: ParticipantInfo[];
     createdAt: string;
+    systemMessages?: SystemMessage[];
   };
   messages: string[];
   isSuccess: boolean;
@@ -215,6 +221,7 @@ export interface AddParticipantResponse {
     conversationId: string;
     addedMembers: ParticipantInfo[];
     memberCount: number;
+    systemMessages: SystemMessage[];
   };
   messages: string[];
   isSuccess: boolean;
@@ -232,6 +239,7 @@ export interface KickOutResponse {
     removedUserId: string;
     removedByUserId: string;
     memberCount: number;
+    systemMessages: SystemMessage[];
   };
   messages: string[];
   isSuccess: boolean;
@@ -248,6 +256,7 @@ export interface LeaveGroupResponse {
     leftUserId: string;
     memberCount: number;
     newOwnerId: string | null;
+    systemMessages: SystemMessage[];
   };
   messages: string[];
   isSuccess: boolean;
@@ -265,6 +274,7 @@ export interface JoinGroupResponse {
     joinedMember: ParticipantInfo | null;
     memberCount: number;
     groupInfo: GroupInfo;
+    systemMessages: SystemMessage[];
   };
   messages: string[];
   isSuccess: boolean;
@@ -307,13 +317,39 @@ export interface SignalRMediaMessageReceive {
   sendTime: string;
 }
 
+// System Message from backend
+export interface SystemMessage {
+  type: number; // 0=CreateGroup, 1=ParticipantJoin, 2=ParticipantLeave, 3=ChangeRoleAfterOwnerLeave, 4=KickMember, 5=AddMember, 6=AllowJoinByLink, 7=AllowAddMember
+  actionUserId: string;
+  targetUserId: string | null;
+  createdAt?: string;
+  content?: string;
+}
+
+export interface UpdateAllowMembersAddResponse {
+  data: {
+    systemMessages: SystemMessage[];
+  };
+  messages: string[];
+  isSuccess: boolean;
+}
+
+export interface UpdateAllowJoinByLinkResponse {
+  data: {
+    groupUrl: string;
+    systemMessages: SystemMessage[];
+  };
+  messages: string[];
+  isSuccess: boolean;
+}
+
 // SignalR Group Events
 export interface GroupCreatedEvent {
   conversationId: string;
   type: number;
   groupInfo: GroupInfo;
   participants: ParticipantInfo[];
-  systemMessages: string[];
+  systemMessages: SystemMessage[];
 }
 
 export interface AddedToGroupEvent {
@@ -321,7 +357,7 @@ export interface AddedToGroupEvent {
   type: number;
   groupInfo: GroupInfo;
   participants: ParticipantInfo[];
-  systemMessages: string[];
+  systemMessages: SystemMessage[];
 }
 
 export interface MemberAddedEvent {
@@ -329,7 +365,7 @@ export interface MemberAddedEvent {
   addedByUserId: string;
   newMembers: ParticipantInfo[];
   memberCount: number;
-  systemMessages: string[];
+  systemMessages: SystemMessage[];
 }
 
 export interface MemberJoinedEvent {
@@ -338,13 +374,13 @@ export interface MemberJoinedEvent {
   joinedUserName: string;
   joinedMember: ParticipantInfo;
   memberCount: number;
-  systemMessages: string[];
+  systemMessages: SystemMessage[];
 }
 
 export interface RemovedFromGroupEvent {
   conversationId: string;
   removedByUserId: string;
-  systemMessages: string[];
+  systemMessages: SystemMessage[];
 }
 
 export interface MemberRemovedEvent {
@@ -352,7 +388,7 @@ export interface MemberRemovedEvent {
   removedUserId: string;
   removedByUserId: string;
   memberCount: number;
-  systemMessages: string[];
+  systemMessages: SystemMessage[];
 }
 
 export interface MemberLeftEvent {
@@ -360,7 +396,7 @@ export interface MemberLeftEvent {
   leftUserId: string;
   newOwnerId: string | null;
   memberCount: number;
-  systemMessages: string[];
+  systemMessages: SystemMessage[];
 }
 
 // Link Preview
@@ -401,6 +437,11 @@ export interface FetchConversationMediaResponse {
 
 export interface FetchConversationLinksResponse {
   data: PaginationData<ConversationLinkItem>;
+  messages: string[];
+  isSuccess: boolean;
+}
+
+export interface MarkConversationAsDeletedLocallyResponse {
   messages: string[];
   isSuccess: boolean;
 }
