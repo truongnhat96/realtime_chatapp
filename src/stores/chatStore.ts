@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ConversationItem, MessageItem, ParticipantInfo, LinkPreviewData, SystemMessage, GroupInfo } from '../types/chat';
+import type { ConversationItem, MessageItem, ParticipantInfo, LinkPreviewData, SystemMessage, GroupInfo, StickerPackageItem } from '../types/chat';
 import { useAuthStore } from './authStore';
 import { convertUtcToLocal } from '../lib/utils';
 
@@ -69,6 +69,8 @@ interface ChatState {
   conversationOpenSignal: Record<string, number>;
   linkPreviews: Record<string, LinkPreviewData>;
   userCache: Record<string, string>;
+  stickerPacks: StickerPackageItem[];
+  stickersByPack: Record<string, string[]>;
 
   setConversations: (conversations: ConversationItem[]) => void;
   appendConversations: (conversations: ConversationItem[]) => void;
@@ -105,6 +107,8 @@ interface ChatState {
   updateGroupSettings: (conversationId: string, settings: Partial<GroupInfo>) => void;
   setLinkPreview: (url: string, data: LinkPreviewData) => void;
   updateSingleUserCache: (userId: string, name: string) => void;
+  setStickerPacks: (packs: StickerPackageItem[]) => void;
+  addStickersForPack: (packageName: string, urls: string[]) => void;
 }
 
 const pendingUserFetches = new Set<string>();
@@ -158,6 +162,8 @@ export const useChatStore = create<ChatState>((set) => ({
   conversationOpenSignal: {},
   linkPreviews: {},
   userCache: {},
+  stickerPacks: [],
+  stickersByPack: {},
 
   setConversations: (incomingConversations) => set((state) => {
     const previousById = new Map(state.conversations.map((conv) => [conv.conversationId, conv]));
@@ -943,6 +949,13 @@ export const useChatStore = create<ChatState>((set) => ({
     userCache: {
       ...state.userCache,
       [userId.toLowerCase()]: name
+    }
+  })),
+  setStickerPacks: (packs) => set({ stickerPacks: packs }),
+  addStickersForPack: (packageName, urls) => set((state) => ({
+    stickersByPack: {
+      ...state.stickersByPack,
+      [packageName]: urls
     }
   })),
 }));

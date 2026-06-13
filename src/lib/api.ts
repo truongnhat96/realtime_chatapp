@@ -24,7 +24,10 @@ import type {
   FetchConversationLinksResponse,
   MarkConversationAsDeletedLocallyResponse,
   UpdateAllowMembersAddResponse,
-  UpdateAllowJoinByLinkResponse
+  UpdateAllowJoinByLinkResponse,
+  StickerPacksResponse,
+  StickersByPackResponse,
+  SearchStickersResponse
 } from '../types/chat';
 
 export const chatApi = {
@@ -303,6 +306,25 @@ export const chatApi = {
   getConversationLinks: (conversationId: string, pageSize: number = 20, pageNumber: number = 1): Promise<FetchConversationLinksResponse> => {
     return axiosInstance.get<never, FetchConversationLinksResponse>(`/conversation/messages/link/${conversationId}`, {
       params: { pageSize, PageSize: pageSize, pageNumber, PageNumber: pageNumber }
+    });
+  },
+
+  // === Sticker APIs ===
+
+  // Lấy danh sách tất cả gói sticker (mỗi gói có ảnh preview)
+  getStickerPacks: (): Promise<StickerPacksResponse> => {
+    return axiosInstance.get<never, StickerPacksResponse>('/sticker/packs');
+  },
+
+  // Lấy danh sách sticker theo gói
+  getStickersByPack: (packageName: string): Promise<StickersByPackResponse> => {
+    return axiosInstance.get<never, StickersByPackResponse>(`/sticker/pack/${packageName}`);
+  },
+
+  // Tìm kiếm sticker theo từ khóa (phân trang)
+  searchStickers: (keyword: string, pageSize: number = 20, pageNumber: number = 1): Promise<SearchStickersResponse> => {
+    return axiosInstance.get<never, SearchStickersResponse>('/sticker/search', {
+      params: { keyword, pageSize, pageNumber }
     });
   }
 };

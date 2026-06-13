@@ -204,7 +204,7 @@ const useChatHub = () => {
             senderName = senderName || "Thành viên nhóm";
           }
         }
-        useChatStore.getState().updateConversationLastMessage(conversationId, msgContent, msgSendTime || '', msgFromUserId, msgMessageType, senderName);
+        useChatStore.getState().updateConversationLastMessage(conversationId, msgMessageType === 6 ? '[Nhãn dán]' : msgContent, msgSendTime || '', msgFromUserId, msgMessageType, senderName);
       }
 
       if (msgFromUserId && msgFromUserId.toLowerCase() !== currentUserId?.toLowerCase()) {
@@ -589,10 +589,10 @@ const useChatHub = () => {
     };
   }, [hasHydrated, accessToken, expiresAt]);
 
-  const sendMessage = useCallback(async (conversationId: string, content: string, toUserId: string) => {
+  const sendMessage = useCallback(async (conversationId: string, content: string, toUserId: string, messageType?: number) => {
     if (connectionRef.current && isConnected) {
       const detectedUrl = getFirstUrl(content);
-      const msgType = detectedUrl ? 5 : 0;
+      const msgType = messageType !== undefined ? messageType : (detectedUrl ? 5 : 0);
 
       const payload = {
         conversationId,
@@ -633,7 +633,8 @@ const useChatHub = () => {
           messageType: msgType,
           isLoading: true,
         });
-        useChatStore.getState().updateConversationLastMessage(conversationId, content, payload.sendTime, currentUserId, msgType, useAuthStore.getState().user?.name);
+        const previewText = msgType === 6 ? '[Nhãn dán]' : content;
+        useChatStore.getState().updateConversationLastMessage(conversationId, previewText, payload.sendTime, currentUserId, msgType, useAuthStore.getState().user?.name);
       }
 
       try {

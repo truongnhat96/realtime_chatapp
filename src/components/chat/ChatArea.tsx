@@ -12,7 +12,7 @@ import ChatDetailSidebar from './ChatDetailSidebar';
 import GroupAvatar from './GroupAvatar';
 
 interface Props {
-  sendMessage: (conversationId: string, content: string, toUserId: string) => Promise<void>;
+  sendMessage: (conversationId: string, content: string, toUserId: string, messageType?: number) => Promise<void>;
   sendTyping: (conversationId: string, toUserId: string) => Promise<void>;
   stopTypingSignal: (conversationId: string, toUserId: string) => Promise<void>;
   markAsRead: (conversationId: string, messageId: string) => Promise<void>;
@@ -139,6 +139,10 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
     stopTyping();
   };
 
+  const handleSendSticker = async (stickerUrl: string) => {
+    await sendMessage(activeConversationId, stickerUrl, typingTargetUserId, 6);
+  };
+
   return (
     <div className="flex h-full">
       {/* Main Chat Area */}
@@ -217,6 +221,7 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
           <ChatInput
             onSendMessage={handleSendMessage}
             onSendMediaFiles={handleSendMediaFiles}
+            onSendSticker={handleSendSticker}
             onTypingInputChange={onTypingInputChange}
             onStopTyping={stopTyping}
             disabled={!isConnected}

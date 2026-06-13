@@ -445,3 +445,33 @@ export interface MarkConversationAsDeletedLocallyResponse {
   messages: string[];
   isSuccess: boolean;
 }
+
+// Sticker Types
+export interface StickerPackageItem {
+  packageName: string;
+  url: string;
+}
+
+export interface StickerByPack {
+  id: string;
+  packageName: string;
+  stickerUrls: string[];
+}
+
+export interface StickerPacksResponse {
+  data: StickerPackageItem[];
+  messages: string[];
+  isSuccess: boolean;
+}
+
+export interface StickersByPackResponse {
+  data: StickerByPack;
+  messages: string[];
+  isSuccess: boolean;
+}
+
+export interface SearchStickersResponse {
+  data: PaginationData<StickerPackageItem>;
+  messages: string[];
+  isSuccess: boolean;
+}

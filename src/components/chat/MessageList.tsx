@@ -453,7 +453,7 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                   {msg.senderName || getSenderName(msg.fromUserId)}
                 </span>
               )}
-              <div className={`flex items-end gap-2 ${isMine ? 'flex-row-reverse' : 'flex-row'} ${(msg.messageType === 1 || msg.messageType === 2 || msg.messageType === 3 || msg.messageType === 5) ? 'max-w-[85%]' : 'max-w-[50%]'}`}>
+              <div className={`flex items-end gap-2 ${isMine ? 'flex-row-reverse' : 'flex-row'} ${(msg.messageType === 1 || msg.messageType === 2 || msg.messageType === 3 || msg.messageType === 5 || msg.messageType === 6) ? 'max-w-[85%]' : 'max-w-[50%]'}`}>
                 {!isMine && (
                   <div className="w-9 flex-shrink-0">
                     {showAvatar ? (
@@ -498,6 +498,18 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                         </div>
                       )}
                     </>
+                  ) : msg.messageType === 6 ? (
+                    /* Sticker message: 130x130 với background-image, không có bubble nền */
+                    <div className="relative group flex flex-col items-center">
+                      <div
+                        className="w-[130px] h-[130px] bg-contain bg-no-repeat bg-center"
+                        style={{ backgroundImage: `url(${msg.content})` }}
+                        title="Nhãn dán"
+                      />
+                      <span className={`text-[9px] text-gray-400 dark:text-gray-500 mt-0.5 select-none opacity-0 group-hover:opacity-100 transition-opacity`}>
+                        {formatMessageTime(msg.sendTime)}
+                      </span>
+                    </div>
                   ) : msg.messageType === 5 ? (
                     /* Link message: text + preview card wrapped together */
                     <div

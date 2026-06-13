@@ -1,5 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Smile, Paperclip, ImagePlus, X, FileText, Plus, Link2 } from 'lucide-react';
+import { Send, Smile, Paperclip, ImagePlus, X, FileText, Plus, Link2, Sticker } from 'lucide-react';
+import StickerPicker from './StickerPicker';
 import { chatApi } from '../../lib/api';
 import { getFirstUrl, normalizeUrl } from '../../lib/utils';
 import type { LinkPreviewData } from '../../types/chat';
@@ -7,6 +8,7 @@ import type { LinkPreviewData } from '../../types/chat';
 interface Props {
   onSendMessage: (text: string) => void | Promise<void>;
   onSendMediaFiles: (files: File[], content: string | null) => void | Promise<void>;
+  onSendSticker?: (url: string) => void | Promise<void>;
   onTypingInputChange?: (value: string) => void;
   onStopTyping?: () => void;
   disabled?: boolean;
@@ -32,10 +34,11 @@ type FileAttachment = {
   id: string;
 };
 
-export default function ChatInput({ onSendMessage, onSendMediaFiles, onTypingInputChange, onStopTyping, disabled }: Props) {
+export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendSticker, onTypingInputChange, onStopTyping, disabled }: Props) {
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<FileAttachment[]>([]);
+  const [showStickerPicker, setShowStickerPicker] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaInputRef = useRef<HTMLInputElement>(null);
@@ -326,10 +329,26 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onTypingInp
       )}
 
       {/* Input row */}
-      <div className="p-4">
+      <div className="p-4 relative">
+        {/* Sticker Picker popup */}
+        {showStickerPicker && onSendSticker && (
+          <StickerPicker
+            onSendSticker={onSendSticker}
+            onClose={() => setShowStickerPicker(false)}
+          />
+        )}
         <div className="flex items-center gap-2 bg-gray-100 dark:bg-[#2C2C2C] rounded-full p-2 pr-2.5 transition-colors">
           <button className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-full transition-colors">
             <Smile size={22} />
+          </button>
+
+          {/* Nút Sticker */}
+          <button
+            onClick={() => setShowStickerPicker(prev => !prev)}
+            className={`p-2 rounded-full transition-colors ${showStickerPicker ? 'bg-[#8ED8ED]/20 text-[#8ED8ED]' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
+            title="Nhãn dán"
+          >
+            <Sticker size={22} />
           </button>
 
           {/* Nút chọn ảnh/video */}
