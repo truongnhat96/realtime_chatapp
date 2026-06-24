@@ -5,6 +5,20 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+/** Mapping reaction type enum → Unicode emoji */
+export const REACTION_EMOJI_MAP: Record<number, string> = {
+  0: '👍', // Like
+  1: '❤️', // Love
+  2: '😂', // Haha
+  3: '😮', // Wow
+  4: '😢', // Sad
+  5: '😡', // Angry
+};
+
+export function getReactionEmoji(reactionType: number): string {
+  return REACTION_EMOJI_MAP[reactionType] ?? '👍';
+}
+
 /**
  * Chuyển đổi chuỗi thời gian UTC từ server (hoặc ISO string) về múi giờ Việt Nam (UTC+7)
  * Dưới dạng chuỗi ISO địa phương "YYYY-MM-DDTHH:mm:ss.sss" để khi tạo đối tượng Date mới,
@@ -229,6 +243,11 @@ export function formatSystemMessage(
       return actionUserId.toLowerCase() === currentUserId?.toLowerCase()
         ? 'Bạn đã thay đổi quyền thêm thành viên vào nhóm.'
         : `${actionName} đã thay đổi quyền thêm thành viên vào nhóm.`;
+
+    case 8: // UpdateGroupImage
+      return actionUserId.toLowerCase() === currentUserId?.toLowerCase()
+        ? 'Bạn đã cập nhật ảnh nhóm.'
+        : `${actionName} đã cập nhật ảnh nhóm.`;
 
     default:
       return '';

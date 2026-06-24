@@ -25,9 +25,11 @@ import type {
   MarkConversationAsDeletedLocallyResponse,
   UpdateAllowMembersAddResponse,
   UpdateAllowJoinByLinkResponse,
+  UpdateGroupImageResponse,
   StickerPacksResponse,
   StickersByPackResponse,
-  SearchStickersResponse
+  SearchStickersResponse,
+  DeleteMessageResponse
 } from '../types/chat';
 
 export const chatApi = {
@@ -221,7 +223,8 @@ export const chatApi = {
     sendTime: string,
     attachments: Attachment[],
     batchId?: string,
-    batchOrder?: number
+    batchOrder?: number,
+    replyToMessageId?: string
   ): Promise<SendMediaResponse> => {
     const accessToken = useAuthStore.getState().accessToken;
     const response = await axios.post<SendMediaResponse>(
@@ -233,6 +236,7 @@ export const chatApi = {
         fromUserId,
         batchId,
         batchOrder,
+        replyToMessageId: replyToMessageId || undefined,
         attachments: attachments.map(a => ({
           fileName: a.fileName,
           fileSize: a.fileSize,
@@ -326,5 +330,78 @@ export const chatApi = {
     return axiosInstance.get<never, SearchStickersResponse>('/sticker/search', {
       params: { keyword, pageSize, pageNumber }
     });
-  }
+  },
+
+  // Cập nhật ảnh nhóm
+  updateGroupImage: async (conversationId: string, image: File, currentImageUrl?: string | null): Promise<UpdateGroupImageResponse> => {
+    const formData = new FormData();
+    formData.append('ConversationId', conversationId);
+    formData.append('Image', image);
+    if (currentImageUrl) {
+      formData.append('CurrentImageUrl', currentImageUrl);
+    }
+
+    const accessToken = useAuthStore.getState().accessToken;
+    const response = await axios.post<UpdateGroupImageResponse>(
+      `${APP_CONFIG.API_BASE_URL}/conversation/update-group-image`,
+      formData,
+      {
+        withCredentials: true,
+        headers: {
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    );
+
+    return response.data;
+  },
+
+  // Xóa hoặc thu hồi tin nhắn
+  deleteMessage: (messageId: string, removeForEveryone: boolean): Promise<DeleteMessageResponse> => {
+    return axiosInstance.post<never, DeleteMessageResponse>('conversation/messages/delete', {
+      messageId,
+      removeForEveryone,
+    });
+  },
+
+  // === Reaction APIs ===
+
+  createReaction: (payload: {
+    conversationId: string;
+    messageId: string;
+    reactorUserId: string;
+    targetUserId: string;
+    reactionType: number;
+    isTargetUserReceiveNotification: boolean;
+  }) => {
+    return axiosInstance.post<never, { data: import('../types/chat').ReactionItem; messages: string[]; isSuccess: boolean }>('/reaction', payload);
+  },
+
+  updateReaction: (payload: {
+    reactionId: string;
+    conversationId: string;
+    messageId: string;
+    reactorUserId: string;
+    targetUserId: string;
+    reactionType: number;
+    isTargetUserReceiveNotification: boolean;
+  }) => {
+    return axiosInstance.put<never, { data: import('../types/chat').ReactionItem; messages: string[]; isSuccess: boolean }>('/reaction', payload);
+  },
+
+  deleteReaction: (payload: {
+    reactionId: string;
+    conversationId: string;
+    targetUserId: string;
+  }) => {
+    return axiosInstance.delete<never, { data: string; messages: string[]; isSuccess: boolean }>('/reaction', { data: payload });
+  },
+
+  markReactNotificationAsRead: (conversationId: string, readerUserId: string) => {
+    return axiosInstance.post<never, { messages: string[]; isSuccess: boolean }>('/reaction/mark-read', {
+      conversationId,
+      readerUserId,
+    });
+  },
 };

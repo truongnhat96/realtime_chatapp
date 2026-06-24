@@ -4,7 +4,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { chatApi } from '../../lib/api';
 import { Loader2 } from 'lucide-react';
 import GroupAvatar from './GroupAvatar';
-import { convertUtcToLocal, formatSystemMessage } from '../../lib/utils';
+import { convertUtcToLocal, formatSystemMessage, getReactionEmoji } from '../../lib/utils';
 import { useMessageTime } from '../../hooks/useLastOnline';
 import type { ConversationItem, MessageItem } from '../../types/chat';
 
@@ -80,8 +80,18 @@ export default function ConversationList() {
     }
   };
 
-  const handleSelect = (id: string) => {
+  const handleSelect = async (id: string) => {
     openConversation(id);
+    // Mark reaction notification as read if needed
+    const conv = conversations.find(c => c.conversationId === id);
+    if (
+      conv?.lastReactNotification &&
+      !conv.lastReactNotification.isRead &&
+      currentUserId &&
+      conv.lastReactNotification.targetUserId.toLowerCase() === currentUserId.toLowerCase()
+    ) {
+      useChatStore.getState().markReactNotificationAsReadLocal(id);
+    }
   };
 
   // const formatTime = (isoString: string) => {
@@ -114,8 +124,14 @@ export default function ConversationList() {
 
   const visibleConversations = conversations.filter(conv => {
     if (conv.type === 1) return true;
-    console.log(conv.messageType, conv.user?.name)
-    return !!conv.message || conv.messageType !== 0 || (messages[conv.conversationId] && messages[conv.conversationId].length > 0);
+    const hasLastMessage = conv.boxChatInfo?.lastMessageId && conv.boxChatInfo.lastMessageId !== '00000000-0000-0000-0000-000000000000';
+    return (
+      !!conv.message ||
+      conv.messageType !== 0 ||
+      !!conv.isRevoked ||
+      !!hasLastMessage ||
+      (messages[conv.conversationId] && messages[conv.conversationId].length > 0)
+    );
   });
 
   return (
@@ -188,7 +204,11 @@ function ConversationItem({
   const opponentLastReadMessageId = conv.boxChatInfo?.opponentLastReadMessageId || conv.lastReadMessageId;
   const isMine = !!lastSenderId && !!currentUserId && lastSenderId.toLowerCase() === currentUserId.toLowerCase();
   const unreadCount = isMine ? 0 : rawUnreadCount;
-  const isUnread = isActive ? false : (unreadCount > 0);
+  const hasUnreadReactNotification = !!(conv.lastReactNotification
+    && !conv.lastReactNotification.isRead
+    && currentUserId
+    && conv.lastReactNotification.targetUserId.toLowerCase() === currentUserId.toLowerCase());
+  const isUnread = isActive ? false : (unreadCount > 0 || hasUnreadReactNotification);
 
   const isSeenByOpponent = !isGroup && isMine && !isUnread && !!lastMessageId && opponentLastReadMessageId === lastMessageId;
 
@@ -202,6 +222,15 @@ function ConversationItem({
         : isMine
           ? 'Bạn: '
           : '';
+
+  const lastSenderName = isMine
+    ? 'Bạn'
+    : isGroup
+      ? (conv.lastMessageSenderName || 'Thành viên')
+      : (avatarUser?.name || 'Đối phương');
+
+  const showReactNotification = !!conv.lastReactNotification;
+  const showPrefix = !conv.isRemovedFromGroup && !!messagePrefix && !conv.isRevoked && !showReactNotification;
 
   let displayMessage = conv.message;
   if (isSystemMessage) {
@@ -269,8 +298,18 @@ function ConversationItem({
         </div>
         <div className="flex justify-between items-center gap-2">
           <p className={`text-sm truncate flex-1 ${isUnread ? 'text-gray-900 dark:text-white font-bold' : isActive ? 'text-gray-900 dark:text-gray-300' : 'text-gray-500 dark:text-gray-400'}`}>
-            {!conv.isRemovedFromGroup && messagePrefix && <span className="mr-0">{messagePrefix}</span>}
-            {!conv.isRemovedFromGroup ? (conv.messageType === 1 ? '[Hình ảnh]' : conv.messageType === 2 ? '[Video]' : conv.messageType === 3 ? '[File]' : conv.messageType === 5 ? '[Liên kết]' : conv.messageType === 6 ? '[Nhãn dán]' : displayMessage) : 'Bạn đã bị xóa khỏi nhóm'}
+            {showPrefix && <span className="mr-0">{messagePrefix}</span>}
+            {conv.isRemovedFromGroup
+              ? 'Bạn đã bị xóa khỏi nhóm'
+              : showReactNotification
+                ? <span>
+                    {resolveUserName(conv.lastReactNotification!.reactorUserId, conv.conversationId, true)}
+                    {` đã bày tỏ cảm xúc ${getReactionEmoji(conv.lastReactNotification!.reactionType)} về tin nhắn`}
+                  </span>
+                : conv.isRevoked
+                  ? <span>{isMine ? 'Bạn đã thu hồi một tin nhắn' : `${lastSenderName} đã thu hồi một tin nhắn`}</span>
+                  : (conv.messageType === 1 ? '[Hình ảnh]' : conv.messageType === 2 ? '[Video]' : conv.messageType === 3 ? '[File]' : conv.messageType === 5 ? '[Liên kết]' : conv.messageType === 6 ? '[Nhãn dán]' : displayMessage)
+            }
           </p>
           {isUnread ? (
             <div className="w-2.5 h-2.5 bg-[#8ED8ED] rounded-full flex-shrink-0"></div>

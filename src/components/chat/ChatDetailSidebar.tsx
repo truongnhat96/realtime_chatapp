@@ -1,5 +1,5 @@
-import { useState, useMemo } from 'react';
-import { X, UserPlus, LogOut, Link2, Copy, Check, Trash2, ChevronDown, Image, FileText, LinkIcon, ChevronRight } from 'lucide-react';
+import { useState, useMemo, useRef } from 'react';
+import { X, UserPlus, LogOut, Link2, Copy, Check, Trash2, ChevronDown, Image, FileText, LinkIcon, ChevronRight, Loader2, ImageIcon } from 'lucide-react';
 import { useChatStore } from '../../stores/chatStore';
 import { useAuthStore } from '../../stores/authStore';
 import { chatApi } from '../../lib/api';
@@ -28,6 +28,9 @@ export default function ChatDetailSidebar({ conversation, onClose, onLeaveConver
   const [isKicking, setIsKicking] = useState<string | null>(null);
   const [isLeaving, setIsLeaving] = useState(false);
   const [overlayTab, setOverlayTab] = useState<OverlayTab | null>(null);
+  const [expandCustomize, setExpandCustomize] = useState(false);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleToggleAllowJoinByLink = async (checked: boolean) => {
     if (isUpdatingSettings) return;
@@ -226,6 +229,79 @@ export default function ChatDetailSidebar({ conversation, onClose, onLeaveConver
                     {copied ? <Check size={14} className="text-green-500" /> : <Copy size={14} className="text-gray-500" />}
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* Tùy chỉnh đoạn chat (chỉ Group, tất cả thành viên) */}
+            {isGroup && (
+              <div className="mx-4 mb-4">
+                <button
+                  onClick={() => setExpandCustomize(!expandCustomize)}
+                  className="flex items-center justify-between w-full py-2"
+                >
+                  <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                    Tùy chỉnh đoạn chat
+                  </span>
+                  <ChevronDown size={16} className={`text-gray-500 transition-transform ${expandCustomize ? 'rotate-180' : ''}`} />
+                </button>
+
+                {expandCustomize && (
+                  <div className="py-1">
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        if (file.size > 1024 * 1024) {
+                          alert('Kích thước ảnh không được vượt quá 1MB.');
+                          e.target.value = '';
+                          return;
+                        }
+                        setIsUploadingImage(true);
+                        void (async () => {
+                          try {
+                            const res = await chatApi.updateGroupImage(
+                              conversation.conversationId,
+                              file,
+                              groupInfo?.groupImage
+                            );
+                            if (res.isSuccess && res.data) {
+                              useChatStore.getState().updateGroupSettings(conversation.conversationId, {
+                                groupImage: res.data.imageUrl,
+                              });
+                              if (res.data.systemMessages?.length) {
+                                useChatStore.getState().addSystemMessages(
+                                  conversation.conversationId,
+                                  res.data.systemMessages
+                                );
+                              }
+                            }
+                          } catch (err) {
+                            console.error('Failed to update group image:', err);
+                          } finally {
+                            setIsUploadingImage(false);
+                            e.target.value = '';
+                          }
+                        })();
+                      }}
+                    />
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isUploadingImage}
+                      className="flex items-center gap-2.5 w-full py-2 px-1 rounded-lg hover:bg-gray-50 dark:hover:bg-[#2C2C2C] transition-colors text-sm text-gray-700 dark:text-gray-300 disabled:opacity-50"
+                    >
+                      {isUploadingImage ? (
+                        <Loader2 size={16} className="animate-spin text-[#8ED8ED]" />
+                      ) : (
+                        <ImageIcon size={16} className="text-gray-500" />
+                      )}
+                      <span>{isUploadingImage ? 'Đang tải lên...' : 'Thay đổi ảnh'}</span>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

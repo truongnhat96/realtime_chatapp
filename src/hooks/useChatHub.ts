@@ -4,7 +4,7 @@ import { APP_CONFIG } from '../lib/constants';
 import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
 import { useToastStore } from '../stores/toastStore';
-import { convertUtcToLocal, getFirstUrl } from '../lib/utils';
+import { convertUtcToLocal, getFirstUrl, getReactionEmoji } from '../lib/utils';
 import type {
   GroupCreatedEvent,
   AddedToGroupEvent,
@@ -14,6 +14,8 @@ import type {
   MemberRemovedEvent,
   MemberLeftEvent,
   SignalRMediaMessageReceive,
+  GroupImageUpdatedEvent,
+  SignalRDeleteMessageEvent,
 } from '../types/chat';
 
 const useChatHub = () => {
@@ -79,6 +81,11 @@ const useChatHub = () => {
       previousConnection.off('MemberLeft');
       previousConnection.off('AllowMemberAddUpdated');
       previousConnection.off('AllowJoinByLinkUpdated');
+      previousConnection.off('GroupImageUpdated');
+      previousConnection.off('ReceiveDeleteMessage');
+      previousConnection.off('ReceiveReactionNotification');
+      previousConnection.off('ReceiveReactionUpdatedNotification');
+      previousConnection.off('ReceiveReactionRemovedNotification');
       if (previousConnection.state !== 'Disconnected') {
         previousConnection.stop().catch(() => undefined);
       }
@@ -139,6 +146,7 @@ const useChatHub = () => {
       }
 
       // Cập nhật nội dung tin nhắn cuối cùng vào store
+      const msgReplyToMessageId = (msg.replyToMessageId || msg.ReplyToMessageId) as string | undefined;
       useChatStore.getState().addMessage(conversationId, {
         id: serverMessageId,
         content: msgContent,
@@ -147,6 +155,7 @@ const useChatHub = () => {
         senderName: msgSenderName,
         senderAvatar: msgSenderAvatar,
         messageType: msgMessageType,
+        replyToMessageId: msgReplyToMessageId || undefined,
       });
 
       if (msgFromUserId) {
@@ -416,6 +425,18 @@ const useChatHub = () => {
       }
     };
 
+    const onGroupImageUpdated = (data: GroupImageUpdatedEvent) => {
+      const conversationId = data.conversationId;
+      const newImageUrl = data.newImageUrl;
+      const systemMessages = data.systemMessages;
+
+      const store = useChatStore.getState();
+      store.updateGroupSettings(conversationId, { groupImage: newImageUrl });
+      if (systemMessages?.length) {
+        store.addSystemMessages(conversationId, systemMessages);
+      }
+    };
+
     // === ReceiveMediaMessage ===
     const onReceiveMediaMessage = (msg: SignalRMediaMessageReceive) => {
       const currentUserId = useAuthStore.getState().user?.id;
@@ -452,6 +473,7 @@ const useChatHub = () => {
         url: attachments[0]?.url || msg.url,
         fileName: attachments[0]?.fileName || msg.fileName,
         fileSize: attachments[0]?.fileSize || msg.fileSize,
+        replyToMessageId: msg.replyToMessageId,
       });
 
       // Cập nhật conversation preview
@@ -506,6 +528,133 @@ const useChatHub = () => {
     connection.on("MemberLeft", onMemberLeft);
     connection.on("AllowMemberAddUpdated", onAllowMemberAddUpdated);
     connection.on("AllowJoinByLinkUpdated", onAllowJoinByLinkUpdated);
+    connection.on("GroupImageUpdated", onGroupImageUpdated);
+
+    // === ReceiveDeleteMessage (thu hồi tin nhắn) ===
+    const onReceiveDeleteMessage = (data: SignalRDeleteMessageEvent | Record<string, unknown>) => {
+      const messageId = ((data as SignalRDeleteMessageEvent).messageId || (data as Record<string, unknown>).MessageId) as string | undefined;
+      const conversationId = ((data as SignalRDeleteMessageEvent).conversationId || (data as Record<string, unknown>).ConversationId) as string | undefined;
+      if (messageId && conversationId) {
+        useChatStore.getState().revokeMessage(conversationId, messageId);
+      }
+    };
+    connection.on("ReceiveDeleteMessage", onReceiveDeleteMessage);
+
+    // === Reaction events ===
+    const onReceiveReactionNotification = async (data: Record<string, unknown>) => {
+      const reactionId = (data.reactionId || data.ReactionId) as string | undefined;
+      const conversationId = (data.conversationId || data.ConversationId) as string | undefined;
+      const messageId = (data.messageId || data.MessageId) as string | undefined;
+      const reactorUserId = (data.reactorUserId || data.ReactorUserId) as string | undefined;
+      const targetUserId = (data.targetUserId || data.TargetUserId) as string | undefined;
+      const reactionType = (data.reactionType ?? data.ReactionType) as number | undefined;
+
+      if (!reactionId || !conversationId || !messageId || !reactorUserId || reactionType === undefined) return;
+
+      const store = useChatStore.getState();
+      const currentUserId = useAuthStore.getState().user?.id;
+
+      store.addReactionToMessage(conversationId, messageId, {
+        reactionId,
+        conversationId,
+        messageId,
+        reactorUserId,
+        targetUserId: targetUserId || '',
+        reactionType,
+      });
+
+      // Notification chỉ hiển thị cho target user (người sở hữu tin nhắn) và reactor không phải là chính mình
+      if (
+        targetUserId &&
+        currentUserId &&
+        targetUserId.toLowerCase() === currentUserId.toLowerCase() &&
+        reactorUserId.toLowerCase() !== currentUserId.toLowerCase()
+      ) {
+        const activeConvId = store.activeConversationId;
+        const isRead = activeConvId === conversationId;
+
+        store.setLastReactNotification(conversationId, {
+          targetUserId,
+          reactorUserId,
+          reactionType,
+          isRead,
+          latestReactTime: new Date().toISOString(),
+        });
+
+        if (!isRead) {
+          // Resolve tên người thả react
+          const { resolveUserName } = await import('../stores/chatStore');
+          const reactorName = resolveUserName(reactorUserId, conversationId, true);
+          const emoji = getReactionEmoji(reactionType);
+          useToastStore.getState().addChatToast({
+            conversationId,
+            userName: reactorName,
+            userAvatar: '',
+            message: `đã bày tỏ cảm xúc ${emoji} về tin nhắn`,
+            time: new Date().toISOString(),
+            isOnline: true,
+          });
+        }
+      }
+    };
+
+    const onReceiveReactionUpdatedNotification = async (data: Record<string, unknown>) => {
+      const reactionId = (data.reactionId || data.ReactionId) as string | undefined;
+      const conversationId = (data.conversationId || data.ConversationId) as string | undefined;
+      const messageId = (data.messageId || data.MessageId) as string | undefined;
+      const reactorUserId = (data.reactorUserId || data.ReactorUserId) as string | undefined;
+      const targetUserId = (data.targetUserId || data.TargetUserId) as string | undefined;
+      const reactionType = (data.reactionType ?? data.ReactionType) as number | undefined;
+
+      if (!reactionId || !conversationId || !messageId || !reactorUserId || reactionType === undefined) return;
+
+      const store = useChatStore.getState();
+      const currentUserId = useAuthStore.getState().user?.id;
+
+      store.updateReactionInMessage(conversationId, messageId, {
+        reactionId,
+        conversationId,
+        messageId,
+        reactorUserId,
+        targetUserId: targetUserId || '',
+        reactionType,
+      });
+
+      if (
+        targetUserId &&
+        currentUserId &&
+        targetUserId.toLowerCase() === currentUserId.toLowerCase() &&
+        reactorUserId.toLowerCase() !== currentUserId.toLowerCase()
+      ) {
+        const activeConvId = store.activeConversationId;
+        const isRead = activeConvId === conversationId;
+
+        store.setLastReactNotification(conversationId, {
+          targetUserId,
+          reactorUserId,
+          reactionType,
+          isRead,
+          latestReactTime: new Date().toISOString(),
+        });
+
+
+      }
+    };
+
+    const onReceiveReactionRemovedNotification = (data: Record<string, unknown>) => {
+      const reactionId = (data.reactionId || data.ReactionId) as string | undefined;
+      const conversationId = (data.conversationId || data.ConversationId) as string | undefined;
+      const messageId = (data.messageId || data.MessageId) as string | undefined;
+
+      if (!reactionId || !conversationId || !messageId) return;
+
+      useChatStore.getState().removeReactionFromMessage(conversationId, messageId, reactionId);
+      useChatStore.getState().setLastReactNotification(conversationId, null);
+    };
+
+    connection.on("ReceiveReactionNotification", onReceiveReactionNotification);
+    connection.on("ReceiveReactionUpdatedNotification", onReceiveReactionUpdatedNotification);
+    connection.on("ReceiveReactionRemovedNotification", onReceiveReactionRemovedNotification);
 
     let isMounted = true;
     let startTimer: ReturnType<typeof setTimeout>;
@@ -581,6 +730,11 @@ const useChatHub = () => {
       connection.off('MemberLeft', onMemberLeft);
       connection.off('AllowMemberAddUpdated', onAllowMemberAddUpdated);
       connection.off('AllowJoinByLinkUpdated', onAllowJoinByLinkUpdated);
+      connection.off('GroupImageUpdated', onGroupImageUpdated);
+      connection.off('ReceiveDeleteMessage', onReceiveDeleteMessage);
+      connection.off('ReceiveReactionNotification', onReceiveReactionNotification);
+      connection.off('ReceiveReactionUpdatedNotification', onReceiveReactionUpdatedNotification);
+      connection.off('ReceiveReactionRemovedNotification', onReceiveReactionRemovedNotification);
       if (connection.state !== 'Disconnected') {
         connection.stop().then(() => {
           setIsConnected(false);
@@ -589,12 +743,12 @@ const useChatHub = () => {
     };
   }, [hasHydrated, accessToken, expiresAt]);
 
-  const sendMessage = useCallback(async (conversationId: string, content: string, toUserId: string, messageType?: number) => {
+  const sendMessage = useCallback(async (conversationId: string, content: string, toUserId: string, messageType?: number, replyToMessageId?: string) => {
     if (connectionRef.current && isConnected) {
       const detectedUrl = getFirstUrl(content);
       const msgType = messageType !== undefined ? messageType : (detectedUrl ? 5 : 0);
 
-      const payload = {
+      const payload: Record<string, unknown> = {
         conversationId,
         content,
         messageType: msgType,
@@ -605,8 +759,13 @@ const useChatHub = () => {
         Content: content,
         MessageType: msgType,
         SendTime: new Date().toISOString(),
-        ToUserId: toUserId
+        ToUserId: toUserId,
       };
+
+      if (replyToMessageId) {
+        payload.replyToMessageId = replyToMessageId;
+        payload.ReplyToMessageId = replyToMessageId;
+      }
 
       // Thêm tin nhắn tạm vào store TRƯỚC khi invoke để tránh race condition
       // (server broadcast ReceiveMessage về trước khi invoke resolve)
@@ -628,13 +787,14 @@ const useChatHub = () => {
         useChatStore.getState().addMessage(conversationId, {
           id: tempId,
           content,
-          sendTime: payload.sendTime,
+          sendTime: payload.sendTime as string,
           fromUserId: currentUserId,
           messageType: msgType,
           isLoading: true,
+          replyToMessageId: replyToMessageId || undefined,
         });
-        const previewText = msgType === 6 ? '[Nhãn dán]' : content;
-        useChatStore.getState().updateConversationLastMessage(conversationId, previewText, payload.sendTime, currentUserId, msgType, useAuthStore.getState().user?.name);
+        const previewText = msgType === 6 ? '[Đã gửi nhãn dán]' : content;
+        useChatStore.getState().updateConversationLastMessage(conversationId, previewText, payload.sendTime as string, currentUserId, msgType, useAuthStore.getState().user?.name);
       }
 
       try {

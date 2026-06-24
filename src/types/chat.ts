@@ -39,12 +39,31 @@ export interface BoxChatInfo {
   unreadCount?: number;
 }
 
+export interface ReactionItem {
+  reactionId: string;
+  conversationId: string;
+  messageId: string;
+  reactorUserId: string;
+  targetUserId: string;
+  reactionType: number; // 0=Like, 1=Love, 2=Haha, 3=Wow, 4=Sad, 5=Angry
+}
+
+export interface LastReactNotification {
+  targetUserId: string;
+  reactorUserId: string;
+  reactionType: number;
+  isRead: boolean;
+  latestReactTime?: string;
+}
+
 export interface ConversationItem {
   conversationId: string;
   type: number; // 0=Private, 1=Group
   user: User | null; // null khi type=1
   participants: ParticipantInfo[]; // Mảng rỗng nếu type=0
   groupInfo?: GroupInfo | null;
+  lastReactNotification?: LastReactNotification | null;
+  originalTimeMessage?: string | null; // Backup timeMessage gốc khi có react notification
   message: string;
   messageType: number; // 0=Text, 1=Image, 2=Video, 3=File, 4=System
   lastMessageSenderName?: string;
@@ -54,6 +73,7 @@ export interface ConversationItem {
   isUnread?: boolean; // Tự thêm để quản lý trạng thái highlight blue dot
   isRemovedFromGroup?: boolean; // Đánh dấu user đã bị xóa khỏi nhóm (vẫn giữ conversation để xem lại)
   chatStatusAfterKick?: number; // 0=None, 1=Kicked, 2=RemovedChatHistory
+  isRevoked?: boolean; // Tin nhắn cuối cùng đã bị thu hồi
   systemMessages?: SystemMessage[];
   // Legacy fields kept for backward compatibility while server rollout completes.
   lastReadMessageId?: string;
@@ -77,6 +97,9 @@ export interface MessageItem {
   messageType: number; // 0=Text, 1=Image, 2=Video, 3=File, 4=System
   readBy?: string[];
   isSeen?: boolean; // Đã được đối phương xem chưa
+  isRevoked?: boolean; // Tin nhắn đã bị thu hồi
+  replyToMessageId?: string; // ID tin nhắn gốc nếu đây là tin nhắn trả lời
+  reactions?: ReactionItem[]; // Danh sách cảm xúc trên tin nhắn
   systemMessages?: SystemMessage[];
   // Media fields (multi-file)
   attachments?: Attachment[];
@@ -297,6 +320,7 @@ export interface SignalRMessageReceive {
   senderAvatar?: string;
   messageType?: number;
   conversationType?: number;
+  replyToMessageId?: string;
 }
 
 export interface SignalRMediaMessageReceive {
@@ -315,11 +339,12 @@ export interface SignalRMediaMessageReceive {
   fileSize?: number;
   content: string | null;
   sendTime: string;
+  replyToMessageId?: string;
 }
 
 // System Message from backend
 export interface SystemMessage {
-  type: number; // 0=CreateGroup, 1=ParticipantJoin, 2=ParticipantLeave, 3=ChangeRoleAfterOwnerLeave, 4=KickMember, 5=AddMember, 6=AllowJoinByLink, 7=AllowAddMember
+  type: number; // 0=CreateGroup, 1=ParticipantJoin, 2=ParticipantLeave, 3=ChangeRoleAfterOwnerLeave, 4=KickMember, 5=AddMember, 6=AllowJoinByLink, 7=AllowAddMember, 8=UpdateGroupImage
   actionUserId: string;
   targetUserId: string | null;
   createdAt?: string;
@@ -341,6 +366,21 @@ export interface UpdateAllowJoinByLinkResponse {
   };
   messages: string[];
   isSuccess: boolean;
+}
+
+export interface UpdateGroupImageResponse {
+  data: {
+    imageUrl: string;
+    systemMessages: SystemMessage[];
+  };
+  messages: string[];
+  isSuccess: boolean;
+}
+
+export interface GroupImageUpdatedEvent {
+  conversationId: string;
+  newImageUrl: string;
+  systemMessages: SystemMessage[];
 }
 
 // SignalR Group Events
@@ -474,4 +514,27 @@ export interface SearchStickersResponse {
   data: PaginationData<StickerPackageItem>;
   messages: string[];
   isSuccess: boolean;
+}
+
+// Delete Message
+export interface DeleteMessageRequest {
+  messageId: string;
+  removeForEveryone: boolean;
+}
+
+export interface DeleteMessageResponse {
+  data: {
+    messageId: string;
+    conversationId: string;
+    messageUserId: string;
+  };
+  messages: string[];
+  isSuccess: boolean;
+}
+
+// SignalR Delete Message Event
+export interface SignalRDeleteMessageEvent {
+  messageId: string;
+  conversationId: string;
+  messageUserId: string;
 }

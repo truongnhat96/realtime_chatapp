@@ -22,7 +22,7 @@ interface UseMediaUploadParams {
  * - Video/File: upload tuần tự (queue) → send-media mỗi file
  */
 export function useMediaUpload({ conversationId, stopTyping }: UseMediaUploadParams) {
-  const handleSendMediaFiles = useCallback(async (files: File[]) => {
+  const handleSendMediaFiles = useCallback(async (files: File[], replyToMessageId?: string) => {
     const currentUserId = useAuthStore.getState().user?.id;
     if (!currentUserId || files.length === 0) return;
 
@@ -59,6 +59,7 @@ export function useMediaUpload({ conversationId, stopTyping }: UseMediaUploadPar
         id: imageBatchId, content: '', sendTime, fromUserId: currentUserId, messageType: 1,
         isLoading: true, progress: 0, attachments: tempImageAttachments,
         batchId, batchOrder: imageBatchOrder,
+        replyToMessageId: replyToMessageId || undefined,
       });
       const previewText = images.length === 1 ? '[Hình ảnh]' : `[${images.length} Hình ảnh]`;
       store.updateConversationLastMessage(conversationId, previewText, sendTime, currentUserId, 1, useAuthStore.getState().user?.name);
@@ -80,6 +81,7 @@ export function useMediaUpload({ conversationId, stopTyping }: UseMediaUploadPar
         fileName: item.file.name, fileSize: item.file.size, isLoading: true, progress: 0, localObjectUrl,
         attachments: [{ fileName: item.file.name, fileSize: item.file.size, url: '', localObjectUrl }],
         batchId, batchOrder: item.batchOrder,
+        replyToMessageId: replyToMessageId || undefined,
       });
       const previewText = item.messageType === 2 ? '[Video]' : `[File] ${item.file.name}`;
       store.updateConversationLastMessage(conversationId, previewText, sendTime, currentUserId, item.messageType, useAuthStore.getState().user?.name);
@@ -89,11 +91,11 @@ export function useMediaUpload({ conversationId, stopTyping }: UseMediaUploadPar
 
     // === Tiến hành Upload ===
     if (images.length > 0) {
-      processImageBatch(images, conversationId, currentUserId, sendTime, imageBatchId, tempImageAttachments, batchId, imageBatchOrder).catch(console.error);
+      processImageBatch(images, conversationId, currentUserId, sendTime, imageBatchId, tempImageAttachments, batchId, imageBatchOrder, replyToMessageId).catch(console.error);
     }
 
     if (queueItems.length > 0) {
-      processQueue(queueItems, conversationId, currentUserId, sendTime, batchId).catch(console.error);
+      processQueue(queueItems, conversationId, currentUserId, sendTime, batchId, replyToMessageId).catch(console.error);
     }
   }, [conversationId, stopTyping]);
 
@@ -111,7 +113,8 @@ async function processImageBatch(
   tempId: string,
   tempAttachments: Attachment[],
   batchId: string,
-  batchOrder: number
+  batchOrder: number,
+  replyToMessageId?: string
 ) {
   try {
     // Upload song song, theo dõi progress trung bình
@@ -151,7 +154,8 @@ async function processImageBatch(
       sendTime,
       serverAttachments,
       batchId,
-      batchOrder
+      batchOrder,
+      replyToMessageId
     );
 
     // Finalize: thay temp message bằng message thật
@@ -180,10 +184,11 @@ async function processQueue(
   conversationId: string,
   currentUserId: string,
   sendTime: string,
-  batchId: string
+  batchId: string,
+  replyToMessageId?: string
 ) {
   for (const item of items) {
-    await processSingleFile(item.file, item.tempId, item.messageType, conversationId, currentUserId, sendTime, batchId, item.batchOrder);
+    await processSingleFile(item.file, item.tempId, item.messageType, conversationId, currentUserId, sendTime, batchId, item.batchOrder, replyToMessageId);
   }
 }
 
@@ -195,7 +200,8 @@ async function processSingleFile(
   currentUserId: string,
   sendTime: string,
   batchId: string,
-  batchOrder: number
+  batchOrder: number,
+  replyToMessageId?: string
 ) {
   try {
     // Upload file
@@ -223,7 +229,8 @@ async function processSingleFile(
       sendTime,
       serverAttachments,
       batchId,
-      batchOrder
+      batchOrder,
+      replyToMessageId
     );
 
     // Finalize

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ConversationItem, MessageItem, ParticipantInfo, LinkPreviewData, SystemMessage, GroupInfo, StickerPackageItem } from '../types/chat';
+import type { ConversationItem, MessageItem, ParticipantInfo, LinkPreviewData, SystemMessage, GroupInfo, StickerPackageItem, ReactionItem, LastReactNotification } from '../types/chat';
 import { useAuthStore } from './authStore';
 import { convertUtcToLocal } from '../lib/utils';
 
@@ -44,6 +44,21 @@ const updateUserCacheHelper = (cache: Record<string, string>, conversations: Con
   return newCache;
 };
 
+const updateUserAvatarCacheHelper = (cache: Record<string, string>, conversations: ConversationItem[]) => {
+  const newCache = { ...cache };
+  for (const conv of conversations) {
+    if (conv.user) {
+      newCache[conv.user.id.toLowerCase()] = conv.user.urlAvatar || '';
+    }
+    if (conv.participants) {
+      for (const p of conv.participants) {
+        newCache[p.id.toLowerCase()] = p.urlAvatar || '';
+      }
+    }
+  }
+  return newCache;
+};
+
 const sortConversations = (conversations: ConversationItem[]) => {
   return [...conversations].sort((a, b) => {
     const timeA = a.timeMessage ? new Date(a.timeMessage).getTime() : 0;
@@ -60,6 +75,13 @@ interface TypingUserState {
   updatedAt: number;
 }
 
+export interface ReplyingMessage {
+  messageId: string;
+  senderName: string;
+  content: string;
+  messageType: number;
+}
+
 interface ChatState {
   conversations: ConversationItem[];
   activeConversationId: string | null;
@@ -69,8 +91,10 @@ interface ChatState {
   conversationOpenSignal: Record<string, number>;
   linkPreviews: Record<string, LinkPreviewData>;
   userCache: Record<string, string>;
+  userAvatarCache: Record<string, string>;
   stickerPacks: StickerPackageItem[];
   stickersByPack: Record<string, string[]>;
+  replyingMessage: ReplyingMessage | null;
 
   setConversations: (conversations: ConversationItem[]) => void;
   appendConversations: (conversations: ConversationItem[]) => void;
@@ -107,8 +131,19 @@ interface ChatState {
   updateGroupSettings: (conversationId: string, settings: Partial<GroupInfo>) => void;
   setLinkPreview: (url: string, data: LinkPreviewData) => void;
   updateSingleUserCache: (userId: string, name: string) => void;
+  updateSingleUserAvatarCache: (userId: string, avatar: string) => void;
   setStickerPacks: (packs: StickerPackageItem[]) => void;
   addStickersForPack: (packageName: string, urls: string[]) => void;
+  setReplyingMessage: (msg: ReplyingMessage | null) => void;
+  revokeMessage: (conversationId: string, messageId: string) => void;
+  deleteMessageLocally: (conversationId: string, messageId: string) => void;
+
+  // Reaction actions
+  addReactionToMessage: (conversationId: string, messageId: string, reaction: ReactionItem) => void;
+  updateReactionInMessage: (conversationId: string, messageId: string, reaction: ReactionItem) => void;
+  removeReactionFromMessage: (conversationId: string, messageId: string, reactionId: string) => void;
+  setLastReactNotification: (conversationId: string, notification: LastReactNotification | null) => void;
+  markReactNotificationAsReadLocal: (conversationId: string) => void;
 }
 
 const pendingUserFetches = new Set<string>();
@@ -123,13 +158,17 @@ export const fetchAndCacheUserProfile = async (userId: string) => {
     const res = await chatApi.getUserProfile(userId);
     if (res.isSuccess && res.data) {
       const name = res.data.name || res.data.userName || 'Thành viên';
+      const avatar = res.data.urlAvatar || '';
       useChatStore.getState().updateSingleUserCache(normalizedId, name);
+      useChatStore.getState().updateSingleUserAvatarCache(normalizedId, avatar);
     } else {
       useChatStore.getState().updateSingleUserCache(normalizedId, 'Thành viên');
+      useChatStore.getState().updateSingleUserAvatarCache(normalizedId, '');
     }
   } catch (error) {
     console.error('Failed to fetch user profile:', error);
     useChatStore.getState().updateSingleUserCache(normalizedId, 'Thành viên');
+    useChatStore.getState().updateSingleUserAvatarCache(normalizedId, '');
   } finally {
     pendingUserFetches.delete(normalizedId);
   }
@@ -153,6 +192,31 @@ export const resolveUserName = (userId: string, conversationId: string, isCapita
   return isCapital ? 'Thành viên' : 'thành viên';
 };
 
+export const resolveUserAvatar = (userId: string, conversationId: string): string => {
+  const currentUserId = useAuthStore.getState().user?.id;
+  if (userId.toLowerCase() === currentUserId?.toLowerCase()) {
+    return useAuthStore.getState().user?.urlAvatar || '/default-avatar.png';
+  }
+  const state = useChatStore.getState();
+  const conv = state.conversations.find(c => c.conversationId === conversationId);
+  if (conv) {
+    if (conv.type === 1) {
+      const member = conv.participants.find(p => p.id.toLowerCase() === userId.toLowerCase());
+      if (member?.urlAvatar) return member.urlAvatar;
+    } else {
+      if (conv.user && conv.user.id.toLowerCase() === userId.toLowerCase()) {
+        return conv.user.urlAvatar || '/default-avatar.png';
+      }
+    }
+  }
+  const cached = state.userAvatarCache?.[userId.toLowerCase()];
+  if (cached) return cached;
+
+  void fetchAndCacheUserProfile(userId);
+
+  return '/default-avatar.png';
+};
+
 export const useChatStore = create<ChatState>((set) => ({
   conversations: [],
   activeConversationId: null,
@@ -162,8 +226,10 @@ export const useChatStore = create<ChatState>((set) => ({
   conversationOpenSignal: {},
   linkPreviews: {},
   userCache: {},
+  userAvatarCache: {},
   stickerPacks: [],
   stickersByPack: {},
+  replyingMessage: null,
 
   setConversations: (incomingConversations) => set((state) => {
     const previousById = new Map(state.conversations.map((conv) => [conv.conversationId, conv]));
@@ -215,8 +281,9 @@ export const useChatStore = create<ChatState>((set) => ({
     });
 
     const nextCache = updateUserCacheHelper(state.userCache || {}, conversations);
+    const nextAvatarCache = updateUserAvatarCacheHelper(state.userAvatarCache || {}, conversations);
     const sortedConversations = sortConversations(conversations);
-    return { conversations: sortedConversations, userCache: nextCache };
+    return { conversations: sortedConversations, userCache: nextCache, userAvatarCache: nextAvatarCache };
   }),
 
   appendConversations: (newConversations) => set((state) => {
@@ -272,8 +339,9 @@ export const useChatStore = create<ChatState>((set) => ({
     const filtered = mergedIncoming.filter((c) => !existingIds.has(c.conversationId));
     const nextConversations = [...state.conversations, ...filtered];
     const nextCache = updateUserCacheHelper(state.userCache || {}, nextConversations);
+    const nextAvatarCache = updateUserAvatarCacheHelper(state.userAvatarCache || {}, nextConversations);
     const sortedConversations = sortConversations(nextConversations);
-    return { conversations: sortedConversations, userCache: nextCache };
+    return { conversations: sortedConversations, userCache: nextCache, userAvatarCache: nextAvatarCache };
   }),
 
   addConversation: (conv) => set((state) => {
@@ -299,8 +367,9 @@ export const useChatStore = create<ChatState>((set) => ({
         };
         const nextConversations = state.conversations.map((c, idx) => idx === existingIndex ? updatedConv : c);
         const nextCache = updateUserCacheHelper(state.userCache || {}, nextConversations);
+        const nextAvatarCache = updateUserAvatarCacheHelper(state.userAvatarCache || {}, nextConversations);
         const sortedConversations = sortConversations(nextConversations);
-        return { conversations: sortedConversations, userCache: nextCache };
+        return { conversations: sortedConversations, userCache: nextCache, userAvatarCache: nextAvatarCache };
       }
       return state;
     }
@@ -323,8 +392,9 @@ export const useChatStore = create<ChatState>((set) => ({
     };
     const nextConversations = [normalizedConv, ...state.conversations];
     const nextCache = updateUserCacheHelper(state.userCache || {}, nextConversations);
+    const nextAvatarCache = updateUserAvatarCacheHelper(state.userAvatarCache || {}, nextConversations);
     const sortedConversations = sortConversations(nextConversations);
-    return { conversations: sortedConversations, userCache: nextCache };
+    return { conversations: sortedConversations, userCache: nextCache, userAvatarCache: nextAvatarCache };
   }),
 
   openConversation: (conversationId) => set((state) => ({
@@ -403,6 +473,9 @@ export const useChatStore = create<ChatState>((set) => ({
             timeMessage: normalizedMsg.sendTime,
             lastMessageSenderId: normalizedMsg.fromUserId,
             systemMessages: normalizedMsg.messageType === 4 ? normalizedMsg.systemMessages : undefined,
+            isRevoked: false,
+            lastReactNotification: null,
+            originalTimeMessage: null,
             boxChatInfo: {
               ...c.boxChatInfo,
               lastMessageId: normalizedMsg.id,
@@ -424,6 +497,9 @@ export const useChatStore = create<ChatState>((set) => ({
             timeMessage: normalizedMsg.sendTime,
             lastMessageSenderId: normalizedMsg.fromUserId,
             systemMessages: normalizedMsg.messageType === 4 ? normalizedMsg.systemMessages : undefined,
+            isRevoked: false,
+            lastReactNotification: null,
+            originalTimeMessage: null,
             boxChatInfo: {
               ...c.boxChatInfo,
               lastMessageId: normalizedMsg.id,
@@ -476,6 +552,9 @@ export const useChatStore = create<ChatState>((set) => ({
           seenMessage: localTime,
           lastMessageSenderId: senderId || c.lastMessageSenderId,
           systemMessages: isSys ? c.systemMessages : undefined,
+          isRevoked: false,
+          lastReactNotification: null,
+          originalTimeMessage: null,
           boxChatInfo: {
             ...c.boxChatInfo,
             lastMessageSenderId: senderId || c.boxChatInfo?.lastMessageSenderId || c.lastMessageSenderId,
@@ -856,6 +935,7 @@ export const useChatStore = create<ChatState>((set) => ({
         messageType: 4,
         timeMessage: lastSmTime,
         systemMessages: systemMsgs,
+        isRevoked: false,
         ...(isNotActive ? {
           isUnread: true,
           boxChatInfo: {
@@ -951,11 +1031,193 @@ export const useChatStore = create<ChatState>((set) => ({
       [userId.toLowerCase()]: name
     }
   })),
+  updateSingleUserAvatarCache: (userId, avatar) => set((state) => ({
+    userAvatarCache: {
+      ...state.userAvatarCache,
+      [userId.toLowerCase()]: avatar
+    }
+  })),
   setStickerPacks: (packs) => set({ stickerPacks: packs }),
   addStickersForPack: (packageName, urls) => set((state) => ({
     stickersByPack: {
       ...state.stickersByPack,
       [packageName]: urls
     }
+  })),
+
+  setReplyingMessage: (msg) => set({ replyingMessage: msg }),
+
+  revokeMessage: (conversationId, messageId) => set((state) => {
+    const convMsgs = state.messages[conversationId];
+    
+    let updatedMessages = state.messages;
+    if (convMsgs) {
+      const updatedMsgs = convMsgs.map(m =>
+        m.id === messageId
+          ? { ...m, isRevoked: true, content: '' }
+          : m
+      );
+      updatedMessages = {
+        ...state.messages,
+        [conversationId]: updatedMsgs
+      };
+    }
+
+    // Cập nhật conversation nếu tin nhắn bị thu hồi là tin nhắn cuối cùng
+    const isLastMsgRevoked = 
+      state.conversations.some(c => c.conversationId === conversationId && c.boxChatInfo?.lastMessageId === messageId) ||
+      (convMsgs && convMsgs[convMsgs.length - 1]?.id === messageId);
+
+    let updatedConversations = state.conversations;
+    if (isLastMsgRevoked) {
+      updatedConversations = state.conversations.map(c =>
+        c.conversationId === conversationId
+          ? { ...c, message: '', isRevoked: true }
+          : c
+      );
+    }
+
+    return {
+      messages: updatedMessages,
+      conversations: updatedConversations,
+    };
+  }),
+
+  deleteMessageLocally: (conversationId, messageId) => set((state) => {
+    const convMsgs = state.messages[conversationId];
+    if (!convMsgs) return state;
+
+    const filtered = convMsgs.filter(m => m.id !== messageId);
+
+    // Nếu không còn tin nhắn nào → ẩn luôn conversation
+    if (filtered.length === 0) {
+      return {
+        conversations: state.conversations.filter(c => c.conversationId !== conversationId),
+        messages: { ...state.messages, [conversationId]: filtered },
+        activeConversationId: state.activeConversationId === conversationId ? null : state.activeConversationId,
+      };
+    }
+
+    // Nếu tin bị ẩn là tin nhắn cuối cùng → cập nhật conversation last message
+    const wasLastMessage = convMsgs[convMsgs.length - 1]?.id === messageId;
+    let updatedConversations = state.conversations;
+    if (wasLastMessage) {
+      const newLastMsg = filtered[filtered.length - 1];
+      updatedConversations = state.conversations.map(c =>
+        c.conversationId === conversationId
+          ? {
+            ...c,
+            message: newLastMsg.isRevoked ? '' : newLastMsg.content,
+            messageType: newLastMsg.messageType,
+            timeMessage: newLastMsg.sendTime,
+            lastMessageSenderId: newLastMsg.fromUserId,
+            lastMessageSenderName: newLastMsg.senderName || c.lastMessageSenderName,
+            isRevoked: newLastMsg.isRevoked ?? false,
+            boxChatInfo: {
+              ...c.boxChatInfo,
+              lastMessageId: newLastMsg.id,
+              lastMessageSenderId: newLastMsg.fromUserId,
+            },
+          }
+          : c
+      );
+      updatedConversations = sortConversations(updatedConversations);
+    }
+
+    return {
+      messages: { ...state.messages, [conversationId]: filtered },
+      conversations: updatedConversations,
+    };
+  }),
+
+  // === Reaction actions ===
+
+  addReactionToMessage: (conversationId, messageId, reaction) => set((state) => {
+    const convMsgs = state.messages[conversationId];
+    if (!convMsgs) return state;
+    return {
+      messages: {
+        ...state.messages,
+        [conversationId]: convMsgs.map(m =>
+          m.id === messageId
+            ? { ...m, reactions: [...(m.reactions || []), reaction] }
+            : m
+        ),
+      },
+    };
+  }),
+
+  updateReactionInMessage: (conversationId, messageId, reaction) => set((state) => {
+    const convMsgs = state.messages[conversationId];
+    if (!convMsgs) return state;
+    return {
+      messages: {
+        ...state.messages,
+        [conversationId]: convMsgs.map(m =>
+          m.id === messageId
+            ? {
+                ...m,
+                reactions: (m.reactions || []).map(r =>
+                  r.reactionId === reaction.reactionId ? reaction : r
+                ),
+              }
+            : m
+        ),
+      },
+    };
+  }),
+
+  removeReactionFromMessage: (conversationId, messageId, reactionId) => set((state) => {
+    const convMsgs = state.messages[conversationId];
+    if (!convMsgs) return state;
+    return {
+      messages: {
+        ...state.messages,
+        [conversationId]: convMsgs.map(m =>
+          m.id === messageId
+            ? { ...m, reactions: (m.reactions || []).filter(r => r.reactionId !== reactionId) }
+            : m
+        ),
+      },
+    };
+  }),
+
+  setLastReactNotification: (conversationId, notification) => set((state) => {
+    const updatedConversations = state.conversations.map(c => {
+      if (c.conversationId === conversationId) {
+        const normalizedNotification = notification ? {
+          ...notification,
+          latestReactTime: notification.latestReactTime ? convertUtcToLocal(notification.latestReactTime) : undefined
+        } : null;
+
+        // Backup timeMessage gốc nếu đây là thông báo cảm xúc đầu tiên (chưa có backup)
+        const originalTimeMessage = normalizedNotification 
+          ? (c.originalTimeMessage || c.timeMessage) 
+          : null;
+
+        // Nếu xóa thông báo cảm xúc (notification là null), khôi phục lại timeMessage gốc
+        const restoredTime = normalizedNotification 
+          ? (normalizedNotification.latestReactTime || c.timeMessage)
+          : (c.originalTimeMessage || c.timeMessage);
+
+        return {
+          ...c,
+          lastReactNotification: normalizedNotification,
+          originalTimeMessage,
+          timeMessage: restoredTime
+        };
+      }
+      return c;
+    });
+    const sortedConversations = sortConversations(updatedConversations);
+    return { conversations: sortedConversations };
+  }),
+
+  markReactNotificationAsReadLocal: (conversationId) => set((state) => ({
+    conversations: state.conversations.map(c =>
+      c.conversationId === conversationId && c.lastReactNotification
+        ? { ...c, lastReactNotification: { ...c.lastReactNotification, isRead: true } }
+        : c
+    ),
   })),
 }));

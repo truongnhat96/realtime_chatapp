@@ -1,9 +1,44 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Send, Smile, Paperclip, ImagePlus, X, FileText, Plus, Link2, Sticker } from 'lucide-react';
+import { Send, Smile, Paperclip, ImagePlus, X, FileText, Plus, Link2, Sticker, Reply } from 'lucide-react';
+import Picker from '@emoji-mart/react';
+import data from '@emoji-mart/data';
 import StickerPicker from './StickerPicker';
 import { chatApi } from '../../lib/api';
 import { getFirstUrl, normalizeUrl } from '../../lib/utils';
+import { useThemeStore } from '../../stores/themeStore';
 import type { LinkPreviewData } from '../../types/chat';
+import type { ReplyingMessage } from '../../stores/chatStore';
+
+/** Vietnamese i18n for Emoji Mart */
+const emojiI18n = {
+  search: 'Tìm kiếm biểu tượng cảm xúc',
+  search_no_results_1: 'Ôi không!',
+  search_no_results_2: 'Không tìm thấy emoji nào',
+  pick: 'Chọn một emoji…',
+  add_custom: 'Thêm emoji tùy chỉnh',
+  categories: {
+    activity: 'Hoạt động',
+    custom: 'Tùy chỉnh',
+    flags: 'Cờ',
+    foods: 'Đồ ăn & Thức uống',
+    frequent: 'Hay dùng',
+    nature: 'Động vật & Thiên nhiên',
+    objects: 'Đồ vật',
+    people: 'Mặt cười và hình người',
+    places: 'Du lịch & Địa điểm',
+    search: 'Kết quả tìm kiếm',
+    symbols: 'Biểu tượng',
+  },
+  skins: {
+    choose: 'Chọn tông màu da mặc định',
+    1: 'Mặc định',
+    2: 'Sáng',
+    3: 'Trung bình sáng',
+    4: 'Trung bình',
+    5: 'Trung bình tối',
+    6: 'Tối',
+  },
+};
 
 interface Props {
   onSendMessage: (text: string) => void | Promise<void>;
@@ -12,6 +47,8 @@ interface Props {
   onTypingInputChange?: (value: string) => void;
   onStopTyping?: () => void;
   disabled?: boolean;
+  replyingMessage?: ReplyingMessage | null;
+  onCancelReply?: () => void;
 }
 
 /** Detect messageType từ MIME: 1=Image, 2=Video, 3=File */
@@ -34,15 +71,20 @@ type FileAttachment = {
   id: string;
 };
 
-export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendSticker, onTypingInputChange, onStopTyping, disabled }: Props) {
+export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendSticker, onTypingInputChange, onStopTyping, disabled, replyingMessage, onCancelReply }: Props) {
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<FileAttachment[]>([]);
   const [showStickerPicker, setShowStickerPicker] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const isDark = useThemeStore((s) => s.isDark);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaInputRef = useRef<HTMLInputElement>(null);
   const previewContainerRef = useRef<HTMLDivElement>(null);
+  const emojiPickerRef = useRef<HTMLDivElement>(null);
+  const emojiButtonRef = useRef<HTMLButtonElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // === Link Preview State ===
   const [linkPreview, setLinkPreview] = useState<LinkPreviewData | null>(null);
@@ -209,10 +251,71 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendStick
     setIsLoadingPreview(false);
   }, [previewUrl]);
 
+  // === Emoji Picker: click-outside handler ===
+  useEffect(() => {
+    if (!showEmojiPicker) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        emojiPickerRef.current && !emojiPickerRef.current.contains(target) &&
+        emojiButtonRef.current && !emojiButtonRef.current.contains(target)
+      ) {
+        setShowEmojiPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showEmojiPicker]);
+
+  /** Append native emoji character vào message */
+  const handleEmojiSelect = useCallback((emoji: { native: string }) => {
+    setMessage((prev) => {
+      const next = prev + emoji.native;
+      onTypingInputChange?.(next);
+      return next;
+    });
+    // Focus lại input sau khi chọn emoji
+    inputRef.current?.focus();
+  }, [onTypingInputChange]);
+
+  const toggleEmojiPicker = useCallback(() => {
+    setShowEmojiPicker((prev) => {
+      if (!prev) setShowStickerPicker(false); // đóng sticker khi mở emoji
+      return !prev;
+    });
+  }, []);
+
   return (
     <div className="bg-white dark:bg-[#1E1E1E] border-t border-gray-200 dark:border-gray-800">
+      {/* Reply preview bar */}
+      {replyingMessage && (
+        <div className="px-4 pt-3">
+          <div className="flex items-center gap-3 bg-gray-50 dark:bg-[#2C2C2C] rounded-xl px-3 py-2.5 border border-gray-200 dark:border-gray-700">
+            <Reply size={18} className="text-[#8ED8ED] flex-shrink-0 scale-x-[-1]" />
+            <div className="flex-1 min-w-0 border-l-2 border-[#8ED8ED] pl-2">
+              <p className="text-xs font-semibold text-[#8ED8ED] truncate">
+                {replyingMessage.senderName}
+              </p>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                {replyingMessage.messageType === 1 ? '[Hình ảnh]'
+                  : replyingMessage.messageType === 2 ? '[Video]'
+                    : replyingMessage.messageType === 3 ? '[File]'
+                      : replyingMessage.messageType === 6 ? '[Đã gửi nhãn dán]'
+                        : replyingMessage.content}
+              </p>
+            </div>
+            <button
+              onClick={onCancelReply}
+              className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-full transition-colors flex-shrink-0"
+              title="Hủy trả lời"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
       {/* Link Preview bar */}
-      {(linkPreview || isLoadingPreview) && !selectedFiles.length && (
+      {(linkPreview || isLoadingPreview) && (
         <div className="px-4 pt-3">
           <div className="flex items-center gap-3 bg-gray-50 dark:bg-[#2C2C2C] rounded-xl px-3 py-2.5 border border-gray-200 dark:border-gray-700">
             <Link2 size={18} className="text-gray-400 flex-shrink-0" />
@@ -330,6 +433,23 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendStick
 
       {/* Input row */}
       <div className="p-4 relative">
+        {/* Emoji Picker popup */}
+        {showEmojiPicker && (
+          <div
+            ref={emojiPickerRef}
+            className="absolute bottom-full left-0 mb-2 z-50 animate-fade-in"
+          >
+            <Picker
+              data={data}
+              onEmojiSelect={handleEmojiSelect}
+              theme={isDark ? 'dark' : 'light'}
+              i18n={emojiI18n}
+              previewPosition="none"
+              skinTonePosition="search"
+              set="native"
+            />
+          </div>
+        )}
         {/* Sticker Picker popup */}
         {showStickerPicker && onSendSticker && (
           <StickerPicker
@@ -338,13 +458,23 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendStick
           />
         )}
         <div className="flex items-center gap-2 bg-gray-100 dark:bg-[#2C2C2C] rounded-full p-2 pr-2.5 transition-colors">
-          <button className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 rounded-full transition-colors">
+          <button
+            ref={emojiButtonRef}
+            onClick={toggleEmojiPicker}
+            className={`p-2 rounded-full transition-colors ${showEmojiPicker ? 'bg-[#8ED8ED]/20 text-[#8ED8ED]' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
+            title="Biểu tượng cảm xúc"
+          >
             <Smile size={22} />
           </button>
 
           {/* Nút Sticker */}
           <button
-            onClick={() => setShowStickerPicker(prev => !prev)}
+            onClick={() => {
+              setShowStickerPicker(prev => {
+                if (!prev) setShowEmojiPicker(false); // đóng emoji khi mở sticker
+                return !prev;
+              });
+            }}
             className={`p-2 rounded-full transition-colors ${showStickerPicker ? 'bg-[#8ED8ED]/20 text-[#8ED8ED]' : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`}
             title="Nhãn dán"
           >
@@ -392,6 +522,7 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendStick
           />
 
           <input
+            ref={inputRef}
             type="text"
             value={message}
             onChange={(e) => {

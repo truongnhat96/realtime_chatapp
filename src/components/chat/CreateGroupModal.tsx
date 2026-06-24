@@ -18,7 +18,7 @@ export default function CreateGroupModal({ onClose, onGroupCreated, addToConvers
   const currentUserId = useAuthStore(state => state.user?.id);
   const [searchQuery, setSearchQuery] = useState('');
   const [users, setUsers] = useState<User[]>([]);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectedUsers, setSelectedUsers] = useState<User[]>([]);
   const [groupName, setGroupName] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -62,22 +62,33 @@ export default function CreateGroupModal({ onClose, onGroupCreated, addToConvers
     fetchSearch();
   }, [debouncedQuery, currentUserId, existingMemberIds]);
 
-  const toggleUser = (userId: string) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(userId)) next.delete(userId);
-      else next.add(userId);
-      return next;
+  const toggleUser = (user: User) => {
+    setSelectedUsers(prev => {
+      const exists = prev.some(u => u.id === user.id);
+      if (exists) return prev.filter(u => u.id !== user.id);
+      return [...prev, user];
     });
   };
 
+  const selectedIds = new Set(selectedUsers.map(u => u.id));
+
+  const generateGroupName = (): string => {
+    const MAX_NAMES = 5;
+    const names = selectedUsers.map(u => u.name).slice(0, MAX_NAMES);
+    if (selectedUsers.length <= MAX_NAMES) {
+      return names.join(', ');
+    }
+    return `${names.join(', ')} và những người khác`;
+  };
+
   const handleSubmit = async () => {
-    if (selectedIds.size === 0) return;
+    if (selectedUsers.length === 0) return;
     setIsSubmitting(true);
 
     try {
       if (isAddMode && addToConversationId) {
-        const res = await chatApi.addParticipant(addToConversationId, Array.from(selectedIds));
+        const memberIds = selectedUsers.map(u => u.id);
+        const res = await chatApi.addParticipant(addToConversationId, memberIds);
         if (res.isSuccess) {
           // Cập nhật participants và system messages vào store
           if (res.data.addedMembers?.length) {
@@ -92,11 +103,11 @@ export default function CreateGroupModal({ onClose, onGroupCreated, addToConvers
           onClose();
         }
       } else {
-        if (!groupName.trim()) return;
+        const finalGroupName = groupName.trim() || generateGroupName();
         const allMemberIds = currentUserId
-          ? [currentUserId, ...Array.from(selectedIds)]
-          : Array.from(selectedIds);
-        const res = await chatApi.createGroup(groupName.trim(), null, allMemberIds);
+          ? [currentUserId, ...selectedUsers.map(u => u.id)]
+          : selectedUsers.map(u => u.id);
+        const res = await chatApi.createGroup(finalGroupName, null, allMemberIds);
         if (res.isSuccess && res.data) {
           useChatStore.getState().addConversation({
             conversationId: res.data.conversationId,
@@ -147,7 +158,7 @@ export default function CreateGroupModal({ onClose, onGroupCreated, addToConvers
           <div className="px-4 pt-4">
             <input
               type="text"
-              placeholder="Tên nhóm..."
+              placeholder="Tên nhóm (không bắt buộc)..."
               value={groupName}
               onChange={e => setGroupName(e.target.value)}
               className="w-full bg-gray-100 dark:bg-[#2C2C2C] text-gray-900 dark:text-gray-100 placeholder-gray-500 py-2.5 px-4 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#8ED8ED] transition-all text-sm"
@@ -170,10 +181,10 @@ export default function CreateGroupModal({ onClose, onGroupCreated, addToConvers
         </div>
 
         {/* Selected count */}
-        {selectedIds.size > 0 && (
+        {selectedUsers.length > 0 && (
           <div className="px-4 pb-2">
             <span className="text-xs text-[#8ED8ED] font-semibold">
-              Đã chọn {selectedIds.size} người
+              Đã chọn {selectedUsers.length} người
             </span>
           </div>
         )}
@@ -199,7 +210,7 @@ export default function CreateGroupModal({ onClose, onGroupCreated, addToConvers
             return (
               <div
                 key={user.id}
-                onClick={() => toggleUser(user.id)}
+                onClick={() => toggleUser(user)}
                 className={`flex items-center gap-3 p-3 rounded-xl cursor-pointer transition-all mb-1 ${isSelected
                     ? 'bg-[#8ED8ED]/15 dark:bg-[#8ED8ED]/10'
                     : 'hover:bg-gray-100 dark:hover:bg-[#2C2C2C]'
@@ -232,15 +243,15 @@ export default function CreateGroupModal({ onClose, onGroupCreated, addToConvers
         <div className="p-4 border-t border-gray-200 dark:border-gray-800">
           <button
             onClick={() => void handleSubmit()}
-            disabled={isSubmitting || selectedIds.size === 0 || (!isAddMode && !groupName.trim())}
+            disabled={isSubmitting || selectedUsers.length === 0}
             className="w-full py-2.5 rounded-xl font-semibold text-sm transition-all disabled:opacity-40 disabled:cursor-not-allowed bg-[#8ED8ED] text-white hover:bg-[#7bc8dd]"
           >
             {isSubmitting ? (
               <Loader2 className="animate-spin mx-auto" size={20} />
             ) : isAddMode ? (
-              `Thêm (${selectedIds.size})`
+              `Thêm (${selectedUsers.length})`
             ) : (
-              `Tạo nhóm (${selectedIds.size})`
+              `Tạo nhóm (${selectedUsers.length})`
             )}
           </button>
         </div>

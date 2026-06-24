@@ -12,7 +12,7 @@ import ChatDetailSidebar from './ChatDetailSidebar';
 import GroupAvatar from './GroupAvatar';
 
 interface Props {
-  sendMessage: (conversationId: string, content: string, toUserId: string, messageType?: number) => Promise<void>;
+  sendMessage: (conversationId: string, content: string, toUserId: string, messageType?: number, replyToMessageId?: string) => Promise<void>;
   sendTyping: (conversationId: string, toUserId: string) => Promise<void>;
   stopTypingSignal: (conversationId: string, toUserId: string) => Promise<void>;
   markAsRead: (conversationId: string, messageId: string) => Promise<void>;
@@ -21,7 +21,7 @@ interface Props {
 }
 
 export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, markAsRead, leaveConversation, isConnected }: Props) {
-  const { conversations, activeConversationId, setActiveConversationId, onlineUsers } = useChatStore();
+  const { conversations, activeConversationId, setActiveConversationId, onlineUsers, replyingMessage, setReplyingMessage } = useChatStore();
   const currentUserId = useAuthStore((state) => state.user?.id);
   const [showDetail, setShowDetail] = useState(false);
 
@@ -135,12 +135,22 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
 
   const handleSendMessage = async (text: string) => {
     // Send via signalR
-    await sendMessage(activeConversationId, text, typingTargetUserId);
+    const replyId = replyingMessage?.messageId;
+    setReplyingMessage(null);
+    await sendMessage(activeConversationId, text, typingTargetUserId, undefined, replyId);
     stopTyping();
   };
 
   const handleSendSticker = async (stickerUrl: string) => {
-    await sendMessage(activeConversationId, stickerUrl, typingTargetUserId, 6);
+    const replyId = replyingMessage?.messageId;
+    setReplyingMessage(null);
+    await sendMessage(activeConversationId, stickerUrl, typingTargetUserId, 6, replyId);
+  };
+
+  const handleSendMediaFilesWithReply = async (files: File[], _content: string | null) => {
+    const replyId = replyingMessage?.messageId;
+    setReplyingMessage(null);
+    await handleSendMediaFiles(files, replyId);
   };
 
   return (
@@ -220,11 +230,13 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
         ) : (
           <ChatInput
             onSendMessage={handleSendMessage}
-            onSendMediaFiles={handleSendMediaFiles}
+            onSendMediaFiles={handleSendMediaFilesWithReply}
             onSendSticker={handleSendSticker}
             onTypingInputChange={onTypingInputChange}
             onStopTyping={stopTyping}
             disabled={!isConnected}
+            replyingMessage={replyingMessage}
+            onCancelReply={() => setReplyingMessage(null)}
           />
         )}
       </div>

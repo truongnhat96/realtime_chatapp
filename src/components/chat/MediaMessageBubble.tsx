@@ -109,7 +109,7 @@ export default function MediaMessageBubble({
             onImageClick={onImageClick}
           />
           {formattedTime && (
-            <div className={`text-[10px] text-gray-400 select-none mt-1 ${isMine ? 'text-right pr-1' : 'text-left pl-1'}`}>
+            <div className="text-[10px] text-gray-400 select-none mt-1 text-left pl-1">
               {formattedTime}
             </div>
           )}
@@ -140,7 +140,7 @@ export default function MediaMessageBubble({
           )}
         </div>
         {formattedTime && (
-          <div className={`text-[10px] text-gray-400 select-none mt-1 ${isMine ? 'text-right pr-1' : 'text-left pl-1'}`}>
+          <div className="text-[10px] text-gray-400 select-none mt-1 text-left pl-1">
             {formattedTime}
           </div>
         )}
@@ -201,7 +201,7 @@ export default function MediaMessageBubble({
           )}
         </div>
         {formattedTime && (
-          <div className={`text-[10px] text-gray-400 select-none mt-1 ${isMine ? 'text-right pr-1' : 'text-left pl-1'}`}>
+          <div className="text-[10px] text-gray-400 select-none mt-1 text-left pl-1">
             {formattedTime}
           </div>
         )}
