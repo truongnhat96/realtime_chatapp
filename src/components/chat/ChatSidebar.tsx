@@ -55,11 +55,11 @@ export default function ChatSidebar() {
             className="rounded-full"
             aria-label="Mở profile người dùng"
           >
-            {user?.urlAvatar ? (
-              <img src={user.urlAvatar} alt="Avatar" className="w-10 h-10 rounded-full object-cover" />
+            {(user?.urlAvatar || (user as any)?.UrlAvatar) ? (
+              <img src={user.urlAvatar || (user as any).UrlAvatar} alt="Avatar" className="w-10 h-10 rounded-full object-cover" />
             ) : (
               <div className="w-10 h-10 bg-gradient-to-tr from-blue-500 to-cyan-400 rounded-full flex items-center justify-center text-white font-bold">
-                {user?.name?.charAt(0).toUpperCase()}
+                {(user?.name || (user as any)?.Name)?.charAt(0).toUpperCase()}
               </div>
             )}
           </button>

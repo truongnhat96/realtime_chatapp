@@ -4,7 +4,9 @@ import { APP_CONFIG } from '../lib/constants';
 import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
 import { useToastStore } from '../stores/toastStore';
+import { useCallStore, CallStatus } from '../stores/callStore';
 import { convertUtcToLocal, getFirstUrl, getReactionEmoji } from '../lib/utils';
+import axiosInstance from '../lib/axiosInstance';
 import type {
   GroupCreatedEvent,
   AddedToGroupEvent,
@@ -86,6 +88,10 @@ const useChatHub = () => {
       previousConnection.off('ReceiveReactionNotification');
       previousConnection.off('ReceiveReactionUpdatedNotification');
       previousConnection.off('ReceiveReactionRemovedNotification');
+      previousConnection.off('ReceiveCallSignal');
+      previousConnection.off('ReceiveWebRTCSignal');
+      previousConnection.off('UserJoinedCall');
+      previousConnection.off('UserLeftCall');
       if (previousConnection.state !== 'Disconnected') {
         previousConnection.stop().catch(() => undefined);
       }
@@ -115,7 +121,7 @@ const useChatHub = () => {
       const currentUserId = useAuthStore.getState().user?.id;
       const activeConversationId = useChatStore.getState().activeConversationId;
 
-      if (!conversationId || !serverMessageId || !msgFromUserId || !msgContent) {
+      if (!conversationId || !serverMessageId || !msgFromUserId) {
         return;
       }
 
@@ -147,15 +153,22 @@ const useChatHub = () => {
 
       // Cập nhật nội dung tin nhắn cuối cùng vào store
       const msgReplyToMessageId = (msg.replyToMessageId || msg.ReplyToMessageId) as string | undefined;
+      const msgCallId = (msg.callId || msg.CallId) as string | undefined;
+      const msgCall = (msg.call || msg.Call) as any | undefined;
+      const msgSystemMessages = (msg.systemMessages || msg.SystemMessages) as any[] | undefined;
+      
       useChatStore.getState().addMessage(conversationId, {
         id: serverMessageId,
-        content: msgContent,
+        content: msgContent ?? '',
         sendTime: msgSendTime || '',
         fromUserId: msgFromUserId,
         senderName: msgSenderName,
         senderAvatar: msgSenderAvatar,
         messageType: msgMessageType,
         replyToMessageId: msgReplyToMessageId || undefined,
+        callId: msgCallId,
+        call: msgCall,
+        systemMessages: msgSystemMessages,
       });
 
       if (msgFromUserId) {
@@ -185,7 +198,7 @@ const useChatHub = () => {
               type: 0,
               user: profileRes.data,
               participants: [],
-              message: msgContent,
+              message: msgContent ?? '',
               messageType: msgMessageType,
               seenMessage: msgSendTime || '',
               timeMessage: msgSendTime || '',
@@ -213,7 +226,7 @@ const useChatHub = () => {
             senderName = senderName || "Thành viên nhóm";
           }
         }
-        useChatStore.getState().updateConversationLastMessage(conversationId, msgMessageType === 6 ? '[Nhãn dán]' : msgContent, msgSendTime || '', msgFromUserId, msgMessageType, senderName);
+        useChatStore.getState().updateConversationLastMessage(conversationId, msgMessageType === 6 ? '[Nhãn dán]' : (msgContent ?? ''), msgSendTime || '', msgFromUserId, msgMessageType, senderName);
       }
 
       if (msgFromUserId && msgFromUserId.toLowerCase() !== currentUserId?.toLowerCase()) {
@@ -223,7 +236,7 @@ const useChatHub = () => {
             conversationId,
             userName: senderName,
             userAvatar: senderAvatar,
-            message: msgContent,
+            message: msgContent ?? '',
             time: msgSendTime || '',
             isOnline: senderIsOnline
           });
@@ -656,6 +669,162 @@ const useChatHub = () => {
     connection.on("ReceiveReactionUpdatedNotification", onReceiveReactionUpdatedNotification);
     connection.on("ReceiveReactionRemovedNotification", onReceiveReactionRemovedNotification);
 
+    const onReceiveCallSignal = async (data: {
+      conversationId: string;
+      fromUserId: string;
+      signalType: string;
+      callId: string;
+      callType: number;
+    }) => {
+      const callStore = useCallStore.getState();
+      
+      switch (data.signalType) {
+        case "ringing":
+          if (callStore.callState === 'idle') {
+            const conv = useChatStore.getState().conversations.find(c => c.conversationId === data.conversationId);
+            let opponentName = 'Người dùng';
+            let opponentAvatar = '';
+            
+            if (conv) {
+              if (conv.type === 0) { // Direct
+                opponentName = conv.user?.name || 'Người dùng';
+                opponentAvatar = conv.user?.urlAvatar || '';
+              } else { // Group
+                const member = conv.participants.find(p => p.id === data.fromUserId);
+                opponentName = member?.name ? `${member.name} (Nhóm ${conv.groupInfo?.name || ''})` : `Nhóm ${conv.groupInfo?.name || ''}`;
+                opponentAvatar = member?.urlAvatar || conv.groupInfo?.groupImage || '';
+              }
+            }
+            
+            callStore.receiveCall({
+              id: data.callId,
+              conversationId: data.conversationId,
+              type: data.callType === 1 ? 'video' : 'voice',
+              startedByUserId: data.fromUserId,
+            }, opponentName, opponentAvatar);
+          } else {
+            try {
+              await connection.invoke("SendCallSignal", data.conversationId, data.fromUserId, 'busy', data.callId, data.callType);
+            } catch (err) {
+              console.error("Lỗi gửi tín hiệu bận:", err);
+            }
+          }
+          break;
+          
+        case "accept":
+          if (callStore.callState === 'ringing_outgoing') {
+            const sendWebRTCSignalLambda = async (targetId: string, signalData: string) => {
+              try {
+                await connection.invoke("SendWebRTCSignal", targetId, signalData);
+              } catch (err) {
+                console.error("Lỗi gửi WebRTC signal:", err);
+              }
+            };
+            await callStore.acceptCallLocal(sendWebRTCSignalLambda, data.fromUserId);
+          }
+          break;
+          
+        case "reject":
+        case "busy":
+          {
+            const conv = useChatStore.getState().conversations.find(c => c.conversationId === data.conversationId);
+            const isGroupCall = conv?.type === 1;
+
+            if (isGroupCall) {
+              const member = conv?.participants.find(p => p.id === data.fromUserId);
+              const memberName = member?.name || 'Thành viên nhóm';
+              useToastStore.getState().addToast({
+                message: `${memberName} ${data.signalType === 'busy' ? 'đang bận' : 'đã từ chối cuộc gọi'}`,
+                type: 'error'
+              });
+            } else {
+              try {
+                await axiosInstance.post('/calls/leave', {
+                  callId: callStore.activeCall?.id,
+                  status: CallStatus.Rejected
+                });
+              } catch (err) {
+                console.error("Lỗi khi call/leave khi nhận reject/busy:", err);
+              }
+              callStore.endCallLocal();
+              useToastStore.getState().addToast({ message: 'Cuộc gọi bị từ chối hoặc người dùng đang bận', type: 'error' });
+            }
+          }
+          break;
+          
+        case "cancel":
+          {
+            const conv = useChatStore.getState().conversations.find(c => c.conversationId === data.conversationId);
+            const isGroupCall = conv?.type === 1;
+            if (isGroupCall && callStore.callState !== 'ringing_incoming') {
+              break;
+            }
+            if (callStore.callState === 'connected') {
+              try {
+                await axiosInstance.post('/calls/leave', {
+                  callId: callStore.activeCall?.id,
+                  status: CallStatus.Ended
+                });
+              } catch (err) {
+                console.error("Lỗi khi call/leave khi nhận cancel:", err);
+              }
+            }
+            callStore.endCallLocal();
+          }
+          break;
+
+        case "camera_on":
+          if (callStore.activeCall && callStore.activeCall.id === data.callId) {
+            callStore.updateParticipantCamera(data.fromUserId, true);
+          }
+          break;
+          
+        case "camera_off":
+          if (callStore.activeCall && callStore.activeCall.id === data.callId) {
+            callStore.updateParticipantCamera(data.fromUserId, false);
+          }
+          break;
+      }
+    };
+ 
+    const onReceiveWebRTCSignal = async (data: { fromUserId: string; signalData: string }) => {
+      const callStore = useCallStore.getState();
+      const signal = JSON.parse(data.signalData);
+      
+      const sendWebRTCSignalLambda = async (targetId: string, signalData: string) => {
+        try {
+          await connection.invoke("SendWebRTCSignal", targetId, signalData);
+        } catch (err) {
+          console.error("Lỗi gửi WebRTC signal:", err);
+        }
+      };
+
+      if (signal.sdp) {
+        if (signal.type === 'offer') {
+          await callStore.handleOffer(signal.sdp, sendWebRTCSignalLambda, data.fromUserId);
+        } else if (signal.type === 'answer') {
+          await callStore.handleAnswer(signal.sdp, data.fromUserId);
+        }
+      } else if (signal.candidate) {
+        await callStore.handleIceCandidate(signal.candidate, data.fromUserId);
+      }
+    };
+ 
+    connection.on("ReceiveCallSignal", onReceiveCallSignal);
+    connection.on("ReceiveWebRTCSignal", onReceiveWebRTCSignal);
+    connection.on("UserJoinedCall", (data: { callId: string; userId: string; userName: string }) => {
+      const callStore = useCallStore.getState();
+      if (callStore.activeCall && callStore.activeCall.id === data.callId) {
+        callStore.addParticipant(data.userId, data.userName);
+      }
+    });
+    connection.on("UserLeftCall", (data: { callId: string; userId: string }) => {
+      const callStore = useCallStore.getState();
+      if (callStore.activeCall && callStore.activeCall.id === data.callId) {
+        callStore.removeParticipant(data.userId);
+      }
+    });
+
     let isMounted = true;
     let startTimer: ReturnType<typeof setTimeout>;
 
@@ -888,6 +1057,24 @@ const useChatHub = () => {
     }
   }, [isConnected]);
 
+  const sendCallSignal = useCallback(async (conversationId: string, targetUserId: string, signalType: string, callId: string, callType: number) => {
+    if (!connectionRef.current || !isConnected) return;
+    try {
+      await connectionRef.current.invoke("SendCallSignal", conversationId, targetUserId, signalType, callId, callType);
+    } catch (err) {
+      console.error("Error sending call signal: ", err);
+    }
+  }, [isConnected]);
+
+  const sendWebRTCSignal = useCallback(async (targetUserId: string, signalData: string) => {
+    if (!connectionRef.current || !isConnected) return;
+    try {
+      await connectionRef.current.invoke("SendWebRTCSignal", targetUserId, signalData);
+    } catch (err) {
+      console.error("Error sending WebRTC signal: ", err);
+    }
+  }, [isConnected]);
+
   return {
     isConnected,
     sendMessage,
@@ -895,7 +1082,9 @@ const useChatHub = () => {
     stopTyping,
     markAsRead,
     joinConversation,
-    leaveConversation
+    leaveConversation,
+    sendCallSignal,
+    sendWebRTCSignal
   };
 };
 

@@ -1,7 +1,8 @@
 import { useAuthStore } from '../stores/authStore';
 import { useChatStore } from '../stores/chatStore';
 import useChatHub from '../hooks/useChatHub';
-// We haven't created these yet, assume they exist
+import { useCallStore } from '../stores/callStore';
+import { useEffect } from 'react';
 import ChatSidebar from '../components/chat/ChatSidebar';
 import ChatArea from '../components/chat/ChatArea.tsx';
 import ChatLanding from '../components/chat/ChatLanding';
@@ -11,7 +12,15 @@ export default function Chat() {
   const { activeConversationId } = useChatStore();
 
   // Khởi tạo SignalR
-  const { isConnected, sendMessage, sendTyping, stopTyping, markAsRead, leaveConversation } = useChatHub();
+  const { isConnected, sendMessage, sendTyping, stopTyping, markAsRead, leaveConversation, sendCallSignal, sendWebRTCSignal } = useChatHub();
+
+  const setChatHub = useCallStore(state => state.setChatHub);
+  useEffect(() => {
+    setChatHub({
+      sendCallSignal,
+      sendWebRTCSignal
+    });
+  }, [sendCallSignal, sendWebRTCSignal, setChatHub]);
 
   if (!hasHydrated || !user) return null;
 

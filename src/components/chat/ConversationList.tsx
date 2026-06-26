@@ -234,19 +234,57 @@ function ConversationItem({
 
   let displayMessage = conv.message;
   if (isSystemMessage) {
-    const lastSysMsg = conv.systemMessages?.[0];
-    if (lastSysMsg) {
-      displayMessage = formatSystemMessage(
-        lastSysMsg.type,
-        lastSysMsg.actionUserId,
-        lastSysMsg.targetUserId,
-        currentUserId,
-        (id, isCapital) => resolveUserName(id, conv.conversationId, isCapital),
-        conv.groupInfo?.name,
-        conv.message
-      );
+    const call = conv.callDetail || cachedLastMessage?.call;
+    if (call) {
+      const isCallMine = call.startedByUserId?.toLowerCase() === currentUserId?.toLowerCase();
+      const isVideo = call.type === 1;
+      const callTypeStr = isVideo ? 'video' : 'thoại';
+      
+      if (isGroup) {
+        if (call.status === 3) {
+          displayMessage = `Cuộc gọi ${callTypeStr} nhóm đang diễn ra`;
+        } else {
+          displayMessage = `Cuộc gọi ${callTypeStr} nhóm đã kết thúc`;
+        }
+      } else {
+        const opponentId = isCallMine 
+          ? (conv.user?.id || conv.participants?.find(p => p.id !== currentUserId)?.id)
+          : call.startedByUserId;
+        const opponentName = opponentId ? resolveUserName(opponentId, conv.conversationId, false) : 'đối phương';
+
+        switch (call.status) {
+          case 0: // Ended
+            displayMessage = `Cuộc gọi ${callTypeStr} đã kết thúc`;
+            break;
+          case 1: // Missed
+            displayMessage = isCallMine ? `Bạn đã gọi nhỡ ${opponentName}` : 'Cuộc gọi nhỡ';
+            break;
+          case 2: // Rejected
+            displayMessage = isCallMine ? `${opponentName} đã từ chối cuộc gọi` : 'Bạn đã từ chối cuộc gọi';
+            break;
+          case 4: // Cancelled
+            displayMessage = isCallMine ? 'Bạn đã hủy cuộc gọi' : 'Cuộc gọi đã hủy';
+            break;
+          default:
+            displayMessage = `Cuộc gọi ${callTypeStr}`;
+            break;
+        }
+      }
     } else {
-      displayMessage = 'Tin nhắn hệ thống';
+      const lastSysMsg = conv.systemMessages?.[0];
+      if (lastSysMsg) {
+        displayMessage = formatSystemMessage(
+          lastSysMsg.type,
+          lastSysMsg.actionUserId,
+          lastSysMsg.targetUserId,
+          currentUserId,
+          (id, isCapital) => resolveUserName(id, conv.conversationId, isCapital),
+          conv.groupInfo?.name,
+          conv.message
+        );
+      } else {
+        displayMessage = 'Tin nhắn hệ thống';
+      }
     }
   }
 

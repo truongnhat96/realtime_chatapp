@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useMemo, useCallback, Fragment } from 'react';
 import { useChatStore, resolveUserName } from '../../stores/chatStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useCallStore } from '../../stores/callStore';
 import { chatApi } from '../../lib/api';
-import { Loader2, Check, AlertCircle, Reply, MoreVertical, Smile } from 'lucide-react';
+import { Loader2, Check, AlertCircle, Reply, MoreVertical, Smile, Phone, Video, PhoneOff, VideoOff, X } from 'lucide-react';
 import GroupAvatar from './GroupAvatar';
 import MediaMessageBubble from './MediaMessageBubble';
 import MediaViewer from './MediaViewer';
@@ -74,6 +75,18 @@ const formatHoverDateTime = (isoString: string) => {
   return `${hours}:${minutes} ${day} Tháng ${month}, ${year}`;
 };
 
+const formatCallDuration = (seconds: number) => {
+  if (!seconds || seconds <= 0) return '00:00';
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  const pad = (num: number) => String(num).padStart(2, '0');
+  if (hrs > 0) {
+    return `${pad(hrs)}:${pad(mins)}:${pad(secs)}`;
+  }
+  return `${pad(mins)}:${pad(secs)}`;
+};
+
 interface Props {
   conversationId: string;
   markAsRead: (conversationId: string, messageId: string) => Promise<void>;
@@ -106,6 +119,11 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
   // Media Viewer state
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerStartIndex, setViewerStartIndex] = useState(0);
+
+  // End call modal state
+  const [showEndCallModal, setShowEndCallModal] = useState(false);
+  const [modalCallType, setModalCallType] = useState<'voice' | 'video'>('voice');
+  const [modalConversationId, setModalConversationId] = useState('');
 
   // More menu state
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
@@ -198,7 +216,7 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
   const typingUsers = typingByConversationId[conversationId] || EMPTY_TYPING_USERS;
   const visibleTypingUsers = useMemo(() => {
     return typingUsers.filter(entry => {
-      if (entry.userId === currentUserId) return false;
+      if (entry.userId.toLowerCase() === currentUserId?.toLowerCase()) return false;
       return Date.now() - entry.updatedAt <= STALE_TYPING_MAX_AGE_MS;
     });
   }, [typingUsers, currentUserId]);
@@ -430,9 +448,205 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
       {currentMessages.map((msg, idx) => {
         const prevMsg = currentMessages[idx - 1];
         const showSeparator = shouldShowSeparator(msg, prevMsg);
+        const isMine = msg.fromUserId?.toLowerCase() === currentUserId?.toLowerCase();
+        const isSameSenderAsPrev = prevMsg?.fromUserId?.toLowerCase() === msg.fromUserId?.toLowerCase() && prevMsg?.messageType !== 4;
+        const marginTop = idx === 0 ? 'mt-0' : isSameSenderAsPrev ? 'mt-0.5' : 'mt-4';
 
         // System message: render căn giữa
         if (msg.messageType === 4) {
+          if (msg.callId && msg.call && (!msg.systemMessages || msg.systemMessages.length === 0)) {
+            const call = msg.call;
+            const isCallMine = call.startedByUserId?.toLowerCase() === currentUserId?.toLowerCase();
+            const isVideo = call.type === 1;
+            const callTypeStr = isVideo ? 'video' : 'thoại';
+            const IconComponent = isVideo ? Video : Phone;
+            const IconOffComponent = isVideo ? VideoOff : PhoneOff;
+
+            const opponentId = isCallMine 
+              ? (activeConversation?.user?.id || activeConversation?.participants?.find(p => p.id !== currentUserId)?.id)
+              : call.startedByUserId;
+
+            let statusTitle = '';
+            let statusSubtitle = '';
+            let showButton = false;
+            let iconBgClass = 'bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300';
+            let iconToUse = <IconComponent size={18} />;
+
+            // 0 = Ended, 1 = Missed, 2 = Rejected, 3 = Ongoing, 4 = Cancelled
+            if (isGroup) {
+              statusTitle = `Cuộc gọi ${callTypeStr} nhóm`;
+              if (call.status === 3) {
+                statusSubtitle = 'Nhấn để tham gia';
+                iconBgClass = 'bg-green-500 text-white animate-pulse';
+                iconToUse = <IconComponent size={18} />;
+              } else {
+                statusSubtitle = 'Cuộc gọi đã kết thúc';
+                iconBgClass = 'bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300';
+                iconToUse = <IconOffComponent size={18} />;
+              }
+            } else {
+              switch (call.status) {
+                case 0: // Ended
+                  statusTitle = `Cuộc gọi ${callTypeStr}`;
+                  statusSubtitle = `Đã kết thúc • ${formatCallDuration(call.durationInSeconds)}`;
+                  showButton = true;
+                  iconBgClass = 'bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300';
+                  iconToUse = <IconComponent size={18} />;
+                  break;
+                case 1: // Missed
+                  statusTitle = 'Đã nhỡ cuộc gọi';
+                  statusSubtitle = callTypeStr;
+                  showButton = true;
+                  if (isCallMine) {
+                    iconBgClass = 'bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300';
+                    iconToUse = <IconOffComponent size={18} />;
+                  } else {
+                    iconBgClass = 'bg-red-500 text-white';
+                    iconToUse = <IconOffComponent size={18} />;
+                  }
+                  break;
+                case 2: // Rejected
+                  statusTitle = `Cuộc gọi ${callTypeStr}`;
+                  statusSubtitle = isCallMine ? 'Đối phương từ chối' : 'Bạn từ chối';
+                  showButton = true;
+                  iconBgClass = 'bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300';
+                  iconToUse = <IconOffComponent size={18} />;
+                  break;
+                case 3: // Ongoing (1-1)
+                  statusTitle = `Cuộc gọi ${callTypeStr} đang diễn ra`;
+                  statusSubtitle = 'Nhấn để tham gia';
+                  iconBgClass = 'bg-green-500 text-white animate-pulse';
+                  iconToUse = <IconComponent size={18} />;
+                  break;
+                case 4: // Cancelled
+                  statusTitle = `Cuộc gọi ${callTypeStr}`;
+                  statusSubtitle = isCallMine ? 'Bạn đã hủy' : 'Đối phương đã hủy';
+                  showButton = true;
+                  iconBgClass = 'bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300';
+                  iconToUse = <IconOffComponent size={18} />;
+                  break;
+                default:
+                  statusTitle = `Cuộc gọi ${callTypeStr}`;
+                  statusSubtitle = '';
+                  showButton = true;
+                  iconBgClass = 'bg-zinc-200 dark:bg-zinc-700 text-zinc-600 dark:text-zinc-300';
+                  iconToUse = <IconComponent size={18} />;
+                  break;
+              }
+            }
+
+            const nextMsg = currentMessages[idx + 1];
+            const isSameSenderAsNext = nextMsg?.fromUserId?.toLowerCase() === msg.fromUserId?.toLowerCase() && nextMsg?.messageType !== 4;
+            const showAvatar = !isMine && !isSameSenderAsNext;
+
+            return (
+              <Fragment key={msg.id || idx}>
+                {showSeparator && (
+                  <div className="flex justify-center w-full my-4 animate-fade-in">
+                    <span className="text-[11px] font-medium text-gray-400 dark:text-gray-500 bg-gray-100 dark:bg-[#2C2C2C] px-3 py-1 rounded-full select-none">
+                      {formatSeparatorTime(msg.sendTime)}
+                    </span>
+                  </div>
+                )}
+                
+                <div 
+                  id={`msg-${msg.id}`} 
+                  className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} ${marginTop} w-full transition-all duration-300 rounded-lg p-0.5 animate-fade-in`}
+                >
+                  {isGroup && !isMine && !isSameSenderAsNext && (
+                    <span className="text-[11px] text-gray-400 dark:text-gray-500 ml-12 mb-0.5 font-medium">
+                      {msg.senderName || getSenderName(msg.fromUserId)}
+                    </span>
+                  )}
+
+                  <div className={`flex items-end gap-2 ${isMine ? 'flex-row-reverse' : 'flex-row'} max-w-[85%]`}>
+                    {!isMine && (
+                      <div className="w-9 flex-shrink-0">
+                        {showAvatar ? (
+                          <img
+                            src={msg.senderAvatar || getSenderAvatar(msg.fromUserId)}
+                            alt=""
+                            className="w-9 h-9 rounded-full object-cover bg-gray-200"
+                          />
+                        ) : (
+                          <div className="w-9" />
+                        )}
+                      </div>
+                    )}
+
+                    <div className="relative flex flex-col items-end group/msg">
+                      <div 
+                        onClick={() => {
+                          const isCallOngoing = call.status === 3;
+                          if (isCallOngoing) {
+                            const callType = call.type === 1 ? 'video' : 'voice';
+                            void useCallStore.getState().joinGroupCall(call.id, conversationId, callType, call.startedByUserId);
+                          } else {
+                            if (isGroup) {
+                              setModalCallType(call.type === 1 ? 'video' : 'voice');
+                              setModalConversationId(conversationId);
+                              setShowEndCallModal(true);
+                            } else if (opponentId) {
+                              const opponentName = resolveUserName(opponentId, conversationId, true);
+                              const opponentAvatar = getSenderAvatar(opponentId) || msg.senderAvatar || '';
+                              const callType = call.type === 1 ? 'video' : 'voice';
+                              void useCallStore.getState().startCall(conversationId, callType, opponentId, opponentName, opponentAvatar);
+                            }
+                          }
+                        }}
+                        className={`w-[230px] p-3 rounded-2xl shadow-xs border flex flex-col gap-2.5 transition-all select-none cursor-pointer
+                          bg-gray-100 dark:bg-[#2C2C2C] border-gray-200/60 dark:border-zinc-800 text-gray-900 dark:text-gray-100 hover:shadow-md hover:bg-gray-200/50 dark:hover:bg-zinc-700/50 active:scale-[0.98]
+                        `}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 ${iconBgClass}`}>
+                            {iconToUse}
+                          </div>
+
+                          <div className="flex flex-col min-w-0">
+                            <span className="font-semibold text-[13px] leading-tight text-gray-900 dark:text-white truncate">
+                              {statusTitle}
+                            </span>
+                            <span className="text-xs leading-tight text-gray-500 dark:text-gray-400 mt-0.5 truncate">
+                              {statusSubtitle}
+                            </span>
+                            <span className="text-[10px] text-gray-400 dark:text-gray-500 mt-1 select-none">
+                              {formatMessageTime(msg.sendTime)}
+                            </span>
+                          </div>
+                        </div>
+
+                        {(showButton || call.status === 3) && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (call.status === 3) {
+                                const callType = call.type === 1 ? 'video' : 'voice';
+                                void useCallStore.getState().joinGroupCall(call.id, conversationId, callType, call.startedByUserId);
+                              } else if (opponentId) {
+                                const opponentName = resolveUserName(opponentId, conversationId, true);
+                                const opponentAvatar = getSenderAvatar(opponentId) || msg.senderAvatar || '';
+                                const callType = call.type === 1 ? 'video' : 'voice';
+                                void useCallStore.getState().startCall(conversationId, callType, opponentId, opponentName, opponentAvatar);
+                              }
+                            }}
+                            className={`w-full py-1.5 px-3 rounded-lg text-xs font-semibold transition-colors text-center cursor-pointer ${
+                              call.status === 3 
+                                ? 'bg-green-500 hover:bg-green-600 text-white animate-pulse' 
+                                : 'bg-gray-200/80 hover:bg-gray-300/80 dark:bg-zinc-700/60 dark:hover:bg-zinc-700 text-gray-800 dark:text-gray-200'
+                            }`}
+                          >
+                            {call.status === 3 ? 'Tham gia' : 'Gọi lại'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </Fragment>
+            );
+          }
+
           const sysMsgs = msg.systemMessages || [];
           return (
             <Fragment key={msg.id || idx}>
@@ -466,17 +680,13 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
           );
         }
 
-        const isMine = msg.fromUserId?.toLowerCase() === currentUserId?.toLowerCase();
         const nextMsg = currentMessages[idx + 1];
-        const isSameSenderAsPrev = prevMsg?.fromUserId?.toLowerCase() === msg.fromUserId?.toLowerCase() && prevMsg?.messageType !== 4;
         const isSameSenderAsNext = nextMsg?.fromUserId?.toLowerCase() === msg.fromUserId?.toLowerCase() && nextMsg?.messageType !== 4;
         // Show avatar only on the LAST message of an opponent group
         const showAvatar = !isMine && !isSameSenderAsNext;
         const isNextSeparator = nextMsg ? shouldShowSeparator(nextMsg, msg) : false;
         const showTime = !isSameSenderAsNext || isNextSeparator;
         const hasReactions = !!(msg.reactions && msg.reactions.length > 0 && msg.messageType !== 6);
-        // Tight gap within same-sender group, larger gap between groups
-        const marginTop = idx === 0 ? 'mt-0' : isSameSenderAsPrev ? 'mt-0.5' : 'mt-4';
 
         // Check if this is our last message, sent successfully but not yet read
         const isLastMessage = idx === currentMessages.length - 1;
@@ -956,6 +1166,50 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
         startIndex={viewerStartIndex}
         messages={currentMessages}
       />
+
+      {/* Ended Call Group Modal */}
+      {showEndCallModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[2px] animate-fade-in">
+          <div className="relative w-full max-w-[340px] p-6 bg-white dark:bg-[#1E1E1E] rounded-2xl shadow-2xl border border-gray-100 dark:border-zinc-800 transition-all scale-in">
+            <button 
+              onClick={() => setShowEndCallModal(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-gray-600 transition-colors"
+            >
+              <X size={16} />
+            </button>
+
+            <div className="flex flex-col items-center text-center mt-2">
+              <h3 className="text-[17px] font-bold text-gray-900 dark:text-white mb-4">
+                Cuộc gọi {modalCallType === 'video' ? 'video' : 'thoại'} nhóm đã kết thúc
+              </h3>
+              
+              <p className="text-[13px] text-gray-500 dark:text-gray-400 mb-6 leading-normal">
+                Hãy gọi cho nhóm để bắt đầu cuộc gọi {modalCallType === 'video' ? 'video' : 'thoại'} mới
+              </p>
+
+              <div className="flex items-center justify-center gap-3 w-full">
+                <button
+                  onClick={() => setShowEndCallModal(false)}
+                  className="flex-1 py-2 px-4 rounded-lg text-sm font-semibold border border-gray-200 dark:border-zinc-800 hover:bg-gray-50 dark:hover:bg-zinc-800 text-gray-700 dark:text-gray-300 transition-colors cursor-pointer"
+                >
+                  Hủy
+                </button>
+                <button
+                  onClick={() => {
+                    const opponentName = activeConversation?.groupInfo?.name || 'Nhóm chat';
+                    const opponentAvatar = activeConversation?.groupInfo?.groupImage || '';
+                    void useCallStore.getState().startCall(modalConversationId, modalCallType, '', opponentName, opponentAvatar);
+                    setShowEndCallModal(false);
+                  }}
+                  className="flex-1 py-2 px-4 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white transition-colors cursor-pointer"
+                >
+                  Gọi nhóm
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

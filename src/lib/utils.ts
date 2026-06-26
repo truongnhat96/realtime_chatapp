@@ -249,6 +249,11 @@ export function formatSystemMessage(
         ? 'Bạn đã cập nhật ảnh nhóm.'
         : `${actionName} đã cập nhật ảnh nhóm.`;
 
+    case 9: // JoinCall
+      return actionUserId.toLowerCase() === currentUserId?.toLowerCase()
+        ? 'Bạn đã tham gia cuộc gọi.'
+        : `${actionName} đã tham gia cuộc gọi.`;
+
     default:
       return '';
   }

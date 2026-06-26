@@ -175,7 +175,7 @@ export const fetchAndCacheUserProfile = async (userId: string) => {
 };
 
 export const resolveUserName = (userId: string, conversationId: string, isCapital = false): string => {
-  const currentUserId = useAuthStore.getState().user?.id;
+  const currentUserId = useAuthStore.getState().user?.id || (useAuthStore.getState().user as any)?.Id;
   if (userId.toLowerCase() === currentUserId?.toLowerCase()) {
     return isCapital ? 'Bạn' : 'bạn';
   }
@@ -193,9 +193,10 @@ export const resolveUserName = (userId: string, conversationId: string, isCapita
 };
 
 export const resolveUserAvatar = (userId: string, conversationId: string): string => {
-  const currentUserId = useAuthStore.getState().user?.id;
+  const currentUserId = useAuthStore.getState().user?.id || (useAuthStore.getState().user as any)?.Id;
   if (userId.toLowerCase() === currentUserId?.toLowerCase()) {
-    return useAuthStore.getState().user?.urlAvatar || '/default-avatar.png';
+    const user = useAuthStore.getState().user;
+    return user?.urlAvatar || (user as any)?.UrlAvatar || '/default-avatar.png';
   }
   const state = useChatStore.getState();
   const conv = state.conversations.find(c => c.conversationId === conversationId);
@@ -424,8 +425,34 @@ export const useChatStore = create<ChatState>((set) => ({
     }
 
     const existingMsgs = state.messages[conversationId] || [];
-    // Ensure no duplicates using message.id
-    if (existingMsgs.some(m => m.id === message.id)) {
+    
+    const existingIdx = existingMsgs.findIndex(m => m.id === message.id);
+    if (existingIdx !== -1) {
+      if (message.callId && message.call) {
+        const updatedMsgs = [...existingMsgs];
+        updatedMsgs[existingIdx] = {
+          ...updatedMsgs[existingIdx],
+          callId: message.callId,
+          call: message.call,
+        };
+        const updatedConversations = state.conversations.map(c =>
+          c.conversationId === conversationId
+            ? {
+              ...c,
+              callId: message.callId,
+              callDetail: message.call,
+              message: message.content || c.message,
+            }
+            : c
+        );
+        return {
+          messages: {
+            ...state.messages,
+            [conversationId]: updatedMsgs
+          },
+          conversations: updatedConversations
+        };
+      }
       return state;
     }
 
@@ -472,7 +499,9 @@ export const useChatStore = create<ChatState>((set) => ({
             lastMessageSenderName: normalizedMsg.senderName || c.lastMessageSenderName,
             timeMessage: normalizedMsg.sendTime,
             lastMessageSenderId: normalizedMsg.fromUserId,
-            systemMessages: normalizedMsg.messageType === 4 ? normalizedMsg.systemMessages : undefined,
+            systemMessages: normalizedMsg.messageType === 4 ? (normalizedMsg.systemMessages || c.systemMessages) : c.systemMessages,
+            callId: (normalizedMsg.messageType === 4 && normalizedMsg.callId) ? normalizedMsg.callId : c.callId,
+            callDetail: (normalizedMsg.messageType === 4 && normalizedMsg.call) ? normalizedMsg.call : c.callDetail,
             isRevoked: false,
             lastReactNotification: null,
             originalTimeMessage: null,
@@ -496,7 +525,9 @@ export const useChatStore = create<ChatState>((set) => ({
             lastMessageSenderName: normalizedMsg.senderName || c.lastMessageSenderName,
             timeMessage: normalizedMsg.sendTime,
             lastMessageSenderId: normalizedMsg.fromUserId,
-            systemMessages: normalizedMsg.messageType === 4 ? normalizedMsg.systemMessages : undefined,
+            systemMessages: normalizedMsg.messageType === 4 ? (normalizedMsg.systemMessages || c.systemMessages) : c.systemMessages,
+            callId: (normalizedMsg.messageType === 4 && normalizedMsg.callId) ? normalizedMsg.callId : c.callId,
+            callDetail: (normalizedMsg.messageType === 4 && normalizedMsg.call) ? normalizedMsg.call : c.callDetail,
             isRevoked: false,
             lastReactNotification: null,
             originalTimeMessage: null,

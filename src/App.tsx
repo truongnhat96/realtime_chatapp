@@ -12,6 +12,7 @@ import LogoutCallback from './pages/LogoutCallback';
 import { useAuthStore } from './stores/authStore';
 import { useThemeStore } from './stores/themeStore';
 import { ToastContainer } from './components/ui/toast-container';
+import CallWindow from './components/chat/CallWindow';
 import { APP_CONFIG } from './lib/constants';
 
 // OIDC Config cho react-oidc-context
@@ -118,6 +119,7 @@ function App() {
       ) : (
         <BrowserRouter>
           <ToastContainer />
+          <CallWindow />
           <Routes>
             <Route element={<AuthLayout />}>
               <Route path="/login" element={

@@ -75,6 +75,8 @@ export interface ConversationItem {
   chatStatusAfterKick?: number; // 0=None, 1=Kicked, 2=RemovedChatHistory
   isRevoked?: boolean; // Tin nhắn cuối cùng đã bị thu hồi
   systemMessages?: SystemMessage[];
+  callId?: string;
+  callDetail?: CallResponse | null;
   // Legacy fields kept for backward compatibility while server rollout completes.
   lastReadMessageId?: string;
   lastMessageSenderId?: string;
@@ -101,6 +103,8 @@ export interface MessageItem {
   replyToMessageId?: string; // ID tin nhắn gốc nếu đây là tin nhắn trả lời
   reactions?: ReactionItem[]; // Danh sách cảm xúc trên tin nhắn
   systemMessages?: SystemMessage[];
+  callId?: string;
+  call?: CallResponse | null;
   // Media fields (multi-file)
   attachments?: Attachment[];
   // Legacy single-file fields (backward compat)
@@ -537,4 +541,22 @@ export interface SignalRDeleteMessageEvent {
   messageId: string;
   conversationId: string;
   messageUserId: string;
+}
+
+export interface CallParticipantResponse {
+  userId: string;
+  joinedAt?: string;
+  leftAt?: string;
+}
+
+export interface CallResponse {
+  id: string;
+  type: number; // 0 = Voice, 1 = Video
+  status: number; // 0 = Ended, 1 = Missed, 2 = Rejected, 3 = Ongoing, 4 = Cancelled
+  startedByUserId: string;
+  startedAt: string;
+  endedAt?: string;
+  durationInSeconds: number;
+  historyMessageId?: string;
+  participants: CallParticipantResponse[];
 }

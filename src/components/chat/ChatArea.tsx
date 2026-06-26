@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { useChatStore } from '../../stores/chatStore';
 import { useAuthStore } from '../../stores/authStore';
+import { useCallStore } from '../../stores/callStore';
 import { chatApi } from '../../lib/api';
 import { useTypingIndicator } from '../../hooks/useTypingIndicator';
 import { useMediaUpload } from '../../hooks/useMediaUpload';
@@ -123,6 +124,33 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
 
   if (!conversation || !activeConversationId) return null;
 
+  const startCall = useCallStore.getState().startCall;
+  const joinGroupCall = useCallStore.getState().joinGroupCall;
+
+  const handleVoiceCall = () => {
+    if (isGroup && conversation.callId && conversation.callDetail && conversation.callDetail.status === 3) {
+      void joinGroupCall(conversation.callId, conversation.conversationId, 'voice', conversation.callDetail.startedByUserId);
+      return;
+    }
+    const opponentUserId = isGroup ? '' : (user?.id || '');
+    const opponentName = isGroup ? (conversation.groupInfo?.name || 'Nhóm chat') : (user?.name || 'Người dùng');
+    const opponentAvatar = isGroup ? (conversation.groupInfo?.groupImage || '') : (user?.urlAvatar || '');
+    
+    void startCall(conversation.conversationId, 'voice', opponentUserId, opponentName, opponentAvatar);
+  };
+
+  const handleVideoCall = () => {
+    if (isGroup && conversation.callId && conversation.callDetail && conversation.callDetail.status === 3) {
+      void joinGroupCall(conversation.callId, conversation.conversationId, 'video', conversation.callDetail.startedByUserId);
+      return;
+    }
+    const opponentUserId = isGroup ? '' : (user?.id || '');
+    const opponentName = isGroup ? (conversation.groupInfo?.name || 'Nhóm chat') : (user?.name || 'Người dùng');
+    const opponentAvatar = isGroup ? (conversation.groupInfo?.groupImage || '') : (user?.urlAvatar || '');
+    
+    void startCall(conversation.conversationId, 'video', opponentUserId, opponentName, opponentAvatar);
+  };
+
   const displayName = isGroup
     ? (conversation.groupInfo?.name || 'Nhóm chat')
     : (user?.name || '');
@@ -196,10 +224,10 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
           </div>
 
           <div className="flex items-center gap-1 text-gray-500 dark:text-gray-400">
-            <button className="p-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors hidden sm:block">
+            <button onClick={handleVoiceCall} className="p-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors hidden sm:block">
               <Phone size={22} />
             </button>
-            <button className="p-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors hidden sm:block">
+            <button onClick={handleVideoCall} className="p-2.5 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors hidden sm:block">
               <Video size={22} />
             </button>
             <button
