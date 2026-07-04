@@ -74,12 +74,19 @@ export interface ConversationItem {
   isRemovedFromGroup?: boolean; // Đánh dấu user đã bị xóa khỏi nhóm (vẫn giữ conversation để xem lại)
   chatStatusAfterKick?: number; // 0=None, 1=Kicked, 2=RemovedChatHistory
   isRevoked?: boolean; // Tin nhắn cuối cùng đã bị thu hồi
+  isMuted?: boolean;
   systemMessages?: SystemMessage[];
   callId?: string;
   callDetail?: CallResponse | null;
+  mentions?: MentionItem[];
   // Legacy fields kept for backward compatibility while server rollout completes.
   lastReadMessageId?: string;
   lastMessageSenderId?: string;
+}
+
+export interface MentionItem {
+  userId: string;
+  type: number; // 0 = Personal, 1 = Everyone
 }
 
 export interface Attachment {
@@ -103,6 +110,7 @@ export interface MessageItem {
   replyToMessageId?: string; // ID tin nhắn gốc nếu đây là tin nhắn trả lời
   reactions?: ReactionItem[]; // Danh sách cảm xúc trên tin nhắn
   systemMessages?: SystemMessage[];
+  mentions?: MentionItem[]; // Danh sách người được nhắc đến trong tin nhắn
   callId?: string;
   call?: CallResponse | null;
   // Media fields (multi-file)
@@ -307,8 +315,14 @@ export interface JoinGroupResponse {
   isSuccess: boolean;
 }
 
+export interface AllParticipantsResponseData {
+  participants: ParticipantInfo[];
+  groupInfo: GroupInfo | null;
+  type: number;
+}
+
 export interface GetMembersResponse {
-  data: ParticipantInfo[];
+  data: AllParticipantsResponseData;
   messages: string[];
   isSuccess: boolean;
 }

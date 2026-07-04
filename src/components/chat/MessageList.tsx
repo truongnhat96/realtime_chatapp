@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useMemo, useCallback, Fragment } from 'react';
-import { useChatStore, resolveUserName } from '../../stores/chatStore';
+import { useChatStore, resolveUserName, fetchAndCacheUserProfile } from '../../stores/chatStore';
 import { useAuthStore } from '../../stores/authStore';
 import { useCallStore } from '../../stores/callStore';
 import { chatApi } from '../../lib/api';
@@ -106,6 +106,74 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
 
   const isGroup = activeConversation?.type === 1;
   const opponentUser = !isGroup ? activeConversation?.user : null;
+
+  // Highlight tags inside content
+  const formatMessageContent = useCallback((content: string, isMine: boolean = false, messageMentions?: import('../../types/chat').MentionItem[]) => {
+    if (!content) return '';
+    if (!isGroup || !messageMentions || messageMentions.length === 0) return content;
+
+    const mentionedNames: string[] = [];
+    messageMentions.forEach(m => {
+      if (m.type === 1) {
+        mentionedNames.push('mọi người');
+      } else if (m.type === 0 && m.userId) {
+        const name = (() => {
+          const lowerId = m.userId.toLowerCase();
+
+          // 1. Kiểm tra nếu là chính mình để lấy tên thật
+          const currentUser = useAuthStore.getState().user;
+          const currentUserId = currentUser?.id || (currentUser as any)?.Id;
+          if (lowerId === currentUserId?.toLowerCase()) {
+            return currentUser?.name || '';
+          }
+
+          // 2. Tìm trong participants của cuộc trò chuyện hiện tại
+          const member = activeConversation?.participants?.find(part => part.id?.toLowerCase() === lowerId);
+          if (member?.name) return member.name;
+
+          // 3. Tìm trong userCache toàn cục
+          const cachedName = useChatStore.getState().userCache?.[lowerId];
+          if (cachedName) return cachedName;
+
+          // 4. Nếu chưa có thì fetch ngầm để cache cho lần sau
+          void fetchAndCacheUserProfile(m.userId);
+
+          return '';
+        })();
+
+        if (name) {
+          mentionedNames.push(name);
+        }
+      }
+    });
+
+    const uniqueNames = Array.from(new Set(mentionedNames)).filter(Boolean);
+    if (uniqueNames.length === 0) return content;
+
+    uniqueNames.sort((a, b) => b.length - a.length);
+
+    const escapedNames = uniqueNames.map(name => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const regex = new RegExp(`@(${escapedNames})`, 'gi');
+
+    const parts = content.split(regex);
+    return parts.map((part, index) => {
+      const isMatch = uniqueNames.some(name => name.toLowerCase() === part.toLowerCase());
+      if (isMatch) {
+        return (
+          <span
+            key={index}
+            className={`font-bold select-all ${isMine
+              ? 'text-blue-900 font-extrabold'
+              : 'text-blue-600 dark:text-blue-400'
+              }`}
+          >
+            @{part}
+          </span>
+        );
+      }
+      return part;
+    });
+  }, [isGroup, activeConversation]);
 
   const [isLoading, setIsLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -450,7 +518,7 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
         const showSeparator = shouldShowSeparator(msg, prevMsg);
         const isMine = msg.fromUserId?.toLowerCase() === currentUserId?.toLowerCase();
         const isSameSenderAsPrev = prevMsg?.fromUserId?.toLowerCase() === msg.fromUserId?.toLowerCase() && prevMsg?.messageType !== 4;
-        const marginTop = idx === 0 ? 'mt-0' : isSameSenderAsPrev ? 'mt-0.5' : 'mt-4';
+        const marginTop = idx === 0 ? 'mt-0' : (isSameSenderAsPrev && !showSeparator) ? 'mt-0.5' : 'mt-4';
 
         // System message: render căn giữa
         if (msg.messageType === 4) {
@@ -462,7 +530,7 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
             const IconComponent = isVideo ? Video : Phone;
             const IconOffComponent = isVideo ? VideoOff : PhoneOff;
 
-            const opponentId = isCallMine 
+            const opponentId = isCallMine
               ? (activeConversation?.user?.id || activeConversation?.participants?.find(p => p.id !== currentUserId)?.id)
               : call.startedByUserId;
 
@@ -548,9 +616,9 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                     </span>
                   </div>
                 )}
-                
-                <div 
-                  id={`msg-${msg.id}`} 
+
+                <div
+                  id={`msg-${msg.id}`}
                   className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} ${marginTop} w-full transition-all duration-300 rounded-lg p-0.5 animate-fade-in`}
                 >
                   {isGroup && !isMine && !isSameSenderAsNext && (
@@ -575,7 +643,7 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                     )}
 
                     <div className="relative flex flex-col items-end group/msg">
-                      <div 
+                      <div
                         onClick={() => {
                           const isCallOngoing = call.status === 3;
                           if (isCallOngoing) {
@@ -630,11 +698,10 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                                 void useCallStore.getState().startCall(conversationId, callType, opponentId, opponentName, opponentAvatar);
                               }
                             }}
-                            className={`w-full py-1.5 px-3 rounded-lg text-xs font-semibold transition-colors text-center cursor-pointer ${
-                              call.status === 3 
-                                ? 'bg-green-500 hover:bg-green-600 text-white animate-pulse' 
-                                : 'bg-gray-200/80 hover:bg-gray-300/80 dark:bg-zinc-700/60 dark:hover:bg-zinc-700 text-gray-800 dark:text-gray-200'
-                            }`}
+                            className={`w-full py-1.5 px-3 rounded-lg text-xs font-semibold transition-colors text-center cursor-pointer ${call.status === 3
+                              ? 'bg-green-500 hover:bg-green-600 text-white animate-pulse'
+                              : 'bg-gray-200/80 hover:bg-gray-300/80 dark:bg-zinc-700/60 dark:hover:bg-zinc-700 text-gray-800 dark:text-gray-200'
+                              }`}
                           >
                             {call.status === 3 ? 'Tham gia' : 'Gọi lại'}
                           </button>
@@ -682,9 +749,9 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
 
         const nextMsg = currentMessages[idx + 1];
         const isSameSenderAsNext = nextMsg?.fromUserId?.toLowerCase() === msg.fromUserId?.toLowerCase() && nextMsg?.messageType !== 4;
-        // Show avatar only on the LAST message of an opponent group
-        const showAvatar = !isMine && !isSameSenderAsNext;
         const isNextSeparator = nextMsg ? shouldShowSeparator(nextMsg, msg) : false;
+        // Show avatar only on the LAST message of an opponent group or before separator
+        const showAvatar = !isMine && (!isSameSenderAsNext || isNextSeparator);
         const showTime = !isSameSenderAsNext || isNextSeparator;
         const hasReactions = !!(msg.reactions && msg.reactions.length > 0 && msg.messageType !== 6);
 
@@ -724,8 +791,8 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
         }
         */
 
-        // Hiện tên sender trên tin nhắn đầu tiên trong group (tin của người khác)
-        const showSenderName = isGroup && !isMine && !isSameSenderAsPrev;
+        // Hiện tên sender trên tin nhắn đầu tiên trong group (tin của người khác) hoặc ngay sau separator
+        const showSenderName = isGroup && !isMine && (!isSameSenderAsPrev || showSeparator);
 
         return (
           <Fragment key={msg.id || idx}>
@@ -784,7 +851,7 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                     const senderName = parentMsg.fromUserId?.toLowerCase() === currentUserId?.toLowerCase()
                       ? 'Bạn'
                       : (parentMsg.senderName || getSenderName(parentMsg.fromUserId));
-                    
+
                     let contentText = parentMsg.content;
                     if (parentMsg.isRevoked) {
                       contentText = 'Tin nhắn đã bị thu hồi';
@@ -799,7 +866,7 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                     }
 
                     return (
-                      <div 
+                      <div
                         onClick={() => {
                           const element = document.getElementById(`msg-${msg.replyToMessageId}`);
                           if (element) {
@@ -810,11 +877,10 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                             }, 2000);
                           }
                         }}
-                        className={`mb-1 px-3 py-1.5 text-xs rounded-xl cursor-pointer border-l-2 transition-all max-w-full select-none ${
-                          isMine 
-                            ? 'bg-[#8ED8ED]/15 dark:bg-[#8ED8ED]/10 hover:bg-[#8ED8ED]/25 dark:hover:bg-[#8ED8ED]/20 text-gray-800 dark:text-gray-200 border-l-[#8ED8ED]' 
-                            : 'bg-gray-200/80 dark:bg-zinc-800/90 hover:bg-gray-200 dark:hover:bg-zinc-700/90 text-gray-800 dark:text-gray-200 border-l-gray-400 dark:border-l-zinc-500'
-                        }`}
+                        className={`mb-1 px-3 py-1.5 text-xs rounded-xl cursor-pointer border-l-2 transition-all max-w-full select-none ${isMine
+                          ? 'bg-[#8ED8ED]/15 dark:bg-[#8ED8ED]/10 hover:bg-[#8ED8ED]/25 dark:hover:bg-[#8ED8ED]/20 text-gray-800 dark:text-gray-200 border-l-[#8ED8ED]'
+                          : 'bg-gray-200/80 dark:bg-zinc-800/90 hover:bg-gray-200 dark:hover:bg-zinc-700/90 text-gray-800 dark:text-gray-200 border-l-gray-400 dark:border-l-zinc-500'
+                          }`}
                       >
                         <p className="font-semibold text-[10px] text-[#7bc8dd] dark:text-[#8ED8ED] truncate">
                           {senderName}
@@ -829,24 +895,23 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                   {/* Revoked message */}
                   {msg.isRevoked ? (
                     <div
-                      className={`py-2 px-4 text-[15px] leading-relaxed break-words w-fit rounded-2xl border border-dashed italic text-gray-400 dark:text-gray-500 ${
-                        isMine
-                          ? 'border-gray-300 dark:border-gray-600 rounded-br-none'
-                          : 'border-gray-300 dark:border-gray-600 rounded-bl-none'
-                      }`}
+                      className={`py-2 px-4 text-[15px] leading-relaxed break-words w-fit rounded-2xl border border-dashed italic text-gray-400 dark:text-gray-500 ${isMine
+                        ? 'border-gray-300 dark:border-gray-600 rounded-br-none'
+                        : 'border-gray-300 dark:border-gray-600 rounded-bl-none'
+                        }`}
                     >
                       <span>
-                        {isMine 
-                          ? 'Bạn đã xóa một tin nhắn' 
+                        {isMine
+                          ? 'Bạn đã xóa một tin nhắn'
                           : (() => {
-                              const name = msg.senderName || getSenderName(msg.fromUserId);
-                              return name ? `${name} đã xóa một tin nhắn` : 'Tin nhắn đã được thu hồi';
-                            })()
+                            const name = msg.senderName || getSenderName(msg.fromUserId);
+                            return name ? `${name} đã xóa một tin nhắn` : 'Tin nhắn đã được thu hồi';
+                          })()
                         }
                       </span>
                     </div>
                   ) : (
-                    <div className="relative group/bubble w-fit max-w-full">
+                    <div className={`relative group/bubble w-fit max-w-full ${hasReactions ? 'mb-2' : ''}`}>
                       {/* Media message (Image/Video/File) */}
                       {(msg.messageType === 1 || msg.messageType === 2 || msg.messageType === 3) ? (
                         <>
@@ -872,7 +937,7 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                                 : 'bg-white dark:bg-[#2C2C2C] text-gray-900 dark:text-gray-100 shadow-sm rounded-bl-none'
                                 }`}
                             >
-                              {msg.content}
+                              {formatMessageContent(msg.content, isMine, msg.mentions)}
                             </div>
                           )}
                         </>
@@ -917,9 +982,8 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                             }`
                             }`}
                         >
-                          <div className={`pt-2 px-4 text-[15px] leading-relaxed break-words relative ${
-                            showTime ? 'pb-5.5' : 'pb-2'
-                          }`}>
+                          <div className={`pt-2 px-4 text-[15px] leading-relaxed break-words relative ${showTime ? 'pb-5.5' : 'pb-2'
+                            }`}>
                             {tokenizeText(msg.content).map((token, index) => {
                               if (token.isUrl) {
                                 return (
@@ -937,7 +1001,7 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                                   </a>
                                 );
                               }
-                              return <span key={index}>{token.text}</span>;
+                              return <span key={index}>{formatMessageContent(token.text, isMine, msg.mentions)}</span>;
                             })}
                             {showTime && (
                               <span className={`absolute bottom-0.5 left-3 text-[9px] select-none ${isMine ? 'text-gray-700/80' : 'text-gray-500 dark:text-gray-400/80'}`}>
@@ -950,30 +1014,28 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                       ) : (
                         /* Text message */
                         <div
-                          className={`pt-2 px-4 text-[15px] leading-relaxed break-words w-fit relative ${
-                            showTime
-                              ? 'pb-5.5'
-                              : hasReactions
-                                ? 'pb-4 pr-6'
-                                : 'pb-2'
-                          } ${
-                            showTime
+                          className={`pt-2 px-4 text-[15px] leading-relaxed break-words w-fit relative ${showTime
+                            ? 'pb-5.5'
+                            : hasReactions
+                              ? 'pb-4 pr-6'
+                              : 'pb-2'
+                            } ${showTime
                               ? (hasReactions ? 'min-w-[120px]' : 'min-w-[90px]')
                               : (hasReactions ? 'min-w-[70px]' : '')
-                          } ${isMine
-                            ? `bg-[#8ED8ED] text-gray-900 ${isSameSenderAsPrev && isSameSenderAsNext ? 'rounded-2xl rounded-br-sm'
-                              : isSameSenderAsPrev ? 'rounded-2xl rounded-tr-sm rounded-br-none'
-                                : isSameSenderAsNext ? 'rounded-2xl rounded-br-sm'
-                                  : 'rounded-2xl rounded-br-none'
-                            }`
-                            : `bg-white dark:bg-[#2C2C2C] text-gray-900 dark:text-gray-100 shadow-sm ${isSameSenderAsPrev && isSameSenderAsNext ? 'rounded-2xl rounded-bl-sm'
-                              : isSameSenderAsPrev ? 'rounded-2xl rounded-tl-sm rounded-bl-none'
-                                : isSameSenderAsNext ? 'rounded-2xl rounded-bl-sm'
-                                  : 'rounded-2xl rounded-bl-none'
-                            }`
+                            } ${isMine
+                              ? `bg-[#8ED8ED] text-gray-900 ${isSameSenderAsPrev && isSameSenderAsNext ? 'rounded-2xl rounded-br-sm'
+                                : isSameSenderAsPrev ? 'rounded-2xl rounded-tr-sm rounded-br-none'
+                                  : isSameSenderAsNext ? 'rounded-2xl rounded-br-sm'
+                                    : 'rounded-2xl rounded-br-none'
+                              }`
+                              : `bg-white dark:bg-[#2C2C2C] text-gray-900 dark:text-gray-100 shadow-sm ${isSameSenderAsPrev && isSameSenderAsNext ? 'rounded-2xl rounded-bl-sm'
+                                : isSameSenderAsPrev ? 'rounded-2xl rounded-tl-sm rounded-bl-none'
+                                  : isSameSenderAsNext ? 'rounded-2xl rounded-bl-sm'
+                                    : 'rounded-2xl rounded-bl-none'
+                              }`
                             }`}
                         >
-                          <span>{msg.content}</span>
+                          <span>{formatMessageContent(msg.content, isMine, msg.mentions)}</span>
                           {showTime && (
                             <span className={`absolute bottom-0.5 left-3 text-[9px] select-none ${isMine ? 'text-gray-700/80' : 'text-gray-500 dark:text-gray-400/80'}`}>
                               {formatMessageTime(msg.sendTime)}
@@ -984,9 +1046,8 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
 
                       {/* Hover toolbar: Reaction + Reply + More */}
                       {!msg.isLoading && !msg.error && (
-                        <div className={`absolute top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover/bubble:opacity-100 transition-opacity z-10 ${
-                          isMine ? '-left-[5.5rem]' : '-right-[5.5rem]'
-                        }`}>
+                        <div className={`absolute top-1/2 -translate-y-1/2 flex items-center gap-0.5 opacity-0 group-hover/bubble:opacity-100 transition-opacity z-10 ${isMine ? '-left-[5.5rem]' : '-right-[5.5rem]'
+                          }`}>
                           <div className="relative">
                             <button
                               onClick={() => setReactionPickerMsgId(prev => prev === msg.id ? null : msg.id)}
@@ -1025,9 +1086,8 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                               <MoreVertical size={16} />
                             </button>
                             {activeMenuId === msg.id && (
-                              <div className={`absolute bottom-full mb-1 bg-white dark:bg-[#2C2C2C] border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg py-1 z-50 min-w-[160px] ${
-                                isMine ? 'right-0' : 'left-0'
-                              }`}>
+                              <div className={`absolute bottom-full mb-1 bg-white dark:bg-[#2C2C2C] border border-gray-200 dark:border-gray-700 rounded-xl shadow-lg py-1 z-50 min-w-[160px] ${isMine ? 'right-0' : 'left-0'
+                                }`}>
                                 {isMine && (
                                   <button
                                     onClick={() => void handleRevoke(msg.id)}
@@ -1049,9 +1109,8 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
                       )}
 
                       {/* Timestamp: hiện khi hover */}
-                      <span className={`absolute -top-7 z-20 transition-all duration-200 opacity-0 group-hover/bubble:opacity-100 pointer-events-none select-none whitespace-nowrap px-2.5 py-1 text-[10.5px] font-medium rounded-full shadow-md backdrop-blur-sm border bg-zinc-900/90 text-zinc-100 border-zinc-700/30 dark:bg-white/95 dark:text-zinc-900 dark:border-zinc-200/50 ${
-                        isMine ? 'right-0' : 'left-0'
-                      }`}>
+                      <span className={`absolute -top-7 z-20 transition-all duration-200 opacity-0 group-hover/bubble:opacity-100 pointer-events-none select-none whitespace-nowrap px-2.5 py-1 text-[10.5px] font-medium rounded-full shadow-md backdrop-blur-sm border bg-zinc-900/90 text-zinc-100 border-zinc-700/30 dark:bg-white/95 dark:text-zinc-900 dark:border-zinc-200/50 ${isMine ? 'right-0' : 'left-0'
+                        }`}>
                         {formatHoverDateTime(msg.sendTime)}
                       </span>
 
@@ -1171,7 +1230,7 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
       {showEndCallModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-[2px] animate-fade-in">
           <div className="relative w-full max-w-[340px] p-6 bg-white dark:bg-[#1E1E1E] rounded-2xl shadow-2xl border border-gray-100 dark:border-zinc-800 transition-all scale-in">
-            <button 
+            <button
               onClick={() => setShowEndCallModal(false)}
               className="absolute top-4 right-4 p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800 text-gray-400 hover:text-gray-600 transition-colors"
             >
@@ -1182,7 +1241,7 @@ export default function MessageList({ conversationId, markAsRead, isConnected }:
               <h3 className="text-[17px] font-bold text-gray-900 dark:text-white mb-4">
                 Cuộc gọi {modalCallType === 'video' ? 'video' : 'thoại'} nhóm đã kết thúc
               </h3>
-              
+
               <p className="text-[13px] text-gray-500 dark:text-gray-400 mb-6 leading-normal">
                 Hãy gọi cho nhóm để bắt đầu cuộc gọi {modalCallType === 'video' ? 'video' : 'thoại'} mới
               </p>

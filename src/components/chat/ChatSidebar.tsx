@@ -56,7 +56,7 @@ export default function ChatSidebar() {
             aria-label="Mở profile người dùng"
           >
             {(user?.urlAvatar || (user as any)?.UrlAvatar) ? (
-              <img src={user.urlAvatar || (user as any).UrlAvatar} alt="Avatar" className="w-10 h-10 rounded-full object-cover" />
+              <img src={user?.urlAvatar || (user as any)?.UrlAvatar} alt="Avatar" className="w-10 h-10 rounded-full object-cover" />
             ) : (
               <div className="w-10 h-10 bg-gradient-to-tr from-blue-500 to-cyan-400 rounded-full flex items-center justify-center text-white font-bold">
                 {(user?.name || (user as any)?.Name)?.charAt(0).toUpperCase()}

@@ -6,14 +6,22 @@ import { chatApi } from '../../lib/api';
 import { useTypingIndicator } from '../../hooks/useTypingIndicator';
 import { useMediaUpload } from '../../hooks/useMediaUpload';
 import { useLastOnline } from '../../hooks/useLastOnline';
-import { ArrowLeft, Phone, Video, Info } from 'lucide-react';
+import { ArrowLeft, Phone, Video, Info, BellOff } from 'lucide-react';
 import MessageList from './MessageList';
 import ChatInput from './ChatInput';
 import ChatDetailSidebar from './ChatDetailSidebar';
 import GroupAvatar from './GroupAvatar';
 
 interface Props {
-  sendMessage: (conversationId: string, content: string, toUserId: string, messageType?: number, replyToMessageId?: string) => Promise<void>;
+  sendMessage: (
+    conversationId: string,
+    content: string,
+    toUserId: string,
+    messageType?: number,
+    replyToMessageId?: string,
+    mentionedUserIds?: string[],
+    mentionEveryone?: boolean
+  ) => Promise<void>;
   sendTyping: (conversationId: string, toUserId: string) => Promise<void>;
   stopTypingSignal: (conversationId: string, toUserId: string) => Promise<void>;
   markAsRead: (conversationId: string, messageId: string) => Promise<void>;
@@ -53,7 +61,11 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
       try {
         const res = await chatApi.getConversationMembers(conversation.conversationId);
         if (res.isSuccess && res.data && lastFetchedIdRef.current === conversation.conversationId) {
-          useChatStore.getState().updateConversationParticipants(conversation.conversationId, res.data, res.data.length);
+          useChatStore.getState().updateConversationParticipants(
+            conversation.conversationId,
+            res.data.participants,
+            res.data.participants.length
+          );
         }
       } catch (err) {
         console.error('Error fetching conversation members:', err);
@@ -135,7 +147,7 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
     const opponentUserId = isGroup ? '' : (user?.id || '');
     const opponentName = isGroup ? (conversation.groupInfo?.name || 'Nhóm chat') : (user?.name || 'Người dùng');
     const opponentAvatar = isGroup ? (conversation.groupInfo?.groupImage || '') : (user?.urlAvatar || '');
-    
+
     void startCall(conversation.conversationId, 'voice', opponentUserId, opponentName, opponentAvatar);
   };
 
@@ -147,7 +159,7 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
     const opponentUserId = isGroup ? '' : (user?.id || '');
     const opponentName = isGroup ? (conversation.groupInfo?.name || 'Nhóm chat') : (user?.name || 'Người dùng');
     const opponentAvatar = isGroup ? (conversation.groupInfo?.groupImage || '') : (user?.urlAvatar || '');
-    
+
     void startCall(conversation.conversationId, 'video', opponentUserId, opponentName, opponentAvatar);
   };
 
@@ -161,11 +173,11 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
       ? (isOnline ? 'Đang hoạt động' : (lastOnlineLabel !== 'Ngoại tuyến' ? lastOnlineLabel : `${conversation.groupInfo?.memberCount || conversation.participants.length} thành viên`))
       : lastOnlineLabel;
 
-  const handleSendMessage = async (text: string) => {
+  const handleSendMessage = async (text: string, mentionedUserIds?: string[], mentionEveryone?: boolean) => {
     // Send via signalR
     const replyId = replyingMessage?.messageId;
     setReplyingMessage(null);
-    await sendMessage(activeConversationId, text, typingTargetUserId, undefined, replyId);
+    await sendMessage(activeConversationId, text, typingTargetUserId, undefined, replyId, mentionedUserIds, mentionEveryone);
     stopTyping();
   };
 
@@ -219,7 +231,15 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
             </div>
             <div>
               <h3 className="font-bold text-base text-gray-900 dark:text-white leading-tight">{displayName}</h3>
-              <span className="text-xs text-[#8ED8ED]">{statusText}</span>
+              <div className="flex items-center gap-1 mt-0.5">
+                <span className="text-xs text-[#8ED8ED]">{statusText}</span>
+                {conversation.isMuted && (
+                  <>
+                    <span className="text-xs text-gray-400 dark:text-gray-500">·</span>
+                    <BellOff size={12} className="text-gray-400 dark:text-gray-500" />
+                  </>
+                )}
+              </div>
             </div>
           </div>
 
@@ -257,6 +277,7 @@ export default function ChatArea({ sendMessage, sendTyping, stopTypingSignal, ma
           </div>
         ) : (
           <ChatInput
+            conversation={conversation}
             onSendMessage={handleSendMessage}
             onSendMediaFiles={handleSendMediaFilesWithReply}
             onSendSticker={handleSendSticker}

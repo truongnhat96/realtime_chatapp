@@ -6,10 +6,16 @@ import { useEffect } from 'react';
 import ChatSidebar from '../components/chat/ChatSidebar';
 import ChatArea from '../components/chat/ChatArea.tsx';
 import ChatLanding from '../components/chat/ChatLanding';
+import { requestNotificationPermission } from '../lib/notification';
 
 export default function Chat() {
   const { user, hasHydrated } = useAuthStore();
   const { activeConversationId } = useChatStore();
+
+  // Yêu cầu quyền thông báo trình duyệt
+  useEffect(() => {
+    void requestNotificationPermission();
+  }, []);
 
   // Khởi tạo SignalR
   const { isConnected, sendMessage, sendTyping, stopTyping, markAsRead, leaveConversation, sendCallSignal, sendWebRTCSignal } = useChatHub();

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ConversationItem, MessageItem, ParticipantInfo, LinkPreviewData, SystemMessage, GroupInfo, StickerPackageItem, ReactionItem, LastReactNotification } from '../types/chat';
+import type { ConversationItem, MessageItem, ParticipantInfo, LinkPreviewData, SystemMessage, GroupInfo, StickerPackageItem, ReactionItem, LastReactNotification, MentionItem } from '../types/chat';
 import { useAuthStore } from './authStore';
 import { convertUtcToLocal } from '../lib/utils';
 
@@ -104,7 +104,7 @@ interface ChatState {
   setMessages: (conversationId: string, messages: MessageItem[]) => void;
   addMessage: (conversationId: string, message: MessageItem) => void;
   prependMessages: (conversationId: string, messages: MessageItem[]) => void; // for load more
-  updateConversationLastMessage: (conversationId: string, messageText: string, time: string, senderId?: string, messageType?: number, senderName?: string) => void;
+  updateConversationLastMessage: (conversationId: string, messageText: string, time: string, senderId?: string, messageType?: number, senderName?: string, mentions?: MentionItem[]) => void;
   setUserOnlineStatus: (userId: string, isOnline: boolean, lastOnline?: string) => void;
   setUserTyping: (conversationId: string, userId: string, isTyping: boolean, userName?: string) => void;
   clearTypingConversation: (conversationId: string) => void;
@@ -112,7 +112,7 @@ interface ChatState {
   setConversationUnread: (conversationId: string, isUnread: boolean) => void;
   markMessageAsSeen: (conversationId: string, messageId: string, readByUserId?: string) => void;
   updateOpponentLastReadMessageId: (conversationId: string, messageId: string) => void;
-  updateMessageId: (conversationId: string, tempId: string, serverId: string) => void;
+  updateMessageId: (conversationId: string, tempId: string, serverId: string, mentions?: MentionItem[]) => void;
   bumpConversationOpenSignal: (conversationId: string) => void;
 
   // Media message actions
@@ -144,6 +144,7 @@ interface ChatState {
   removeReactionFromMessage: (conversationId: string, messageId: string, reactionId: string) => void;
   setLastReactNotification: (conversationId: string, notification: LastReactNotification | null) => void;
   markReactNotificationAsReadLocal: (conversationId: string) => void;
+  toggleMuteConversation: (conversationId: string, isMuted: boolean) => void;
 }
 
 const pendingUserFetches = new Set<string>();
@@ -258,8 +259,13 @@ export const useChatStore = create<ChatState>((set) => ({
       const inferredUnreadCount = isUnreadBySeenMessage(normalizedConv.seenMessage) ? 1 : 0;
       const unreadCount = incomingBox?.unreadCount ?? previousBox?.unreadCount ?? (normalizedConv.isUnread ? 1 : inferredUnreadCount);
 
+      const mergedParticipants = (previous && previous.participants.length > normalizedConv.participants.length)
+        ? previous.participants
+        : normalizedConv.participants;
+
       return {
         ...normalizedConv,
+        participants: mergedParticipants,
         isRemovedFromGroup: normalizedConv.chatStatusAfterKick === 1 || normalizedConv.isRemovedFromGroup,
         boxChatInfo: {
           lastMessageId: normalizeId(incomingBox?.lastMessageId) || normalizeId(previousBox?.lastMessageId),
@@ -313,8 +319,13 @@ export const useChatStore = create<ChatState>((set) => ({
       const inferredUnreadCount = isUnreadBySeenMessage(normalizedConv.seenMessage) ? 1 : 0;
       const unreadCount = incomingBox?.unreadCount ?? existingBox?.unreadCount ?? (normalizedConv.isUnread ? 1 : inferredUnreadCount);
 
+      const mergedParticipants = (existing && existing.participants.length > normalizedConv.participants.length)
+        ? existing.participants
+        : normalizedConv.participants;
+
       return {
         ...normalizedConv,
+        participants: mergedParticipants,
         isRemovedFromGroup: normalizedConv.chatStatusAfterKick === 1 || normalizedConv.isRemovedFromGroup,
         boxChatInfo: {
           lastMessageId: normalizeId(incomingBox?.lastMessageId) || normalizeId(existingBox?.lastMessageId),
@@ -565,7 +576,7 @@ export const useChatStore = create<ChatState>((set) => ({
     };
   }),
 
-  updateConversationLastMessage: (conversationId, messageText, time, senderId, messageType, senderName) => set((state) => {
+  updateConversationLastMessage: (conversationId, messageText, time, senderId, messageType, senderName, mentions) => set((state) => {
     const conv = state.conversations.find(c => c.conversationId === conversationId);
     if (conv?.isRemovedFromGroup) {
       return state;
@@ -586,6 +597,7 @@ export const useChatStore = create<ChatState>((set) => ({
           isRevoked: false,
           lastReactNotification: null,
           originalTimeMessage: null,
+          mentions: mentions || c.mentions,
           boxChatInfo: {
             ...c.boxChatInfo,
             lastMessageSenderId: senderId || c.boxChatInfo?.lastMessageSenderId || c.lastMessageSenderId,
@@ -823,9 +835,9 @@ export const useChatStore = create<ChatState>((set) => ({
     )
   })),
 
-  updateMessageId: (conversationId, tempId, serverId) => set((state) => {
+  updateMessageId: (conversationId, tempId, serverId, mentions) => set((state) => {
     const msgs = state.messages[conversationId] || [];
-    const updatedMsgs = msgs.map(m => m.id === tempId ? { ...m, id: serverId, isLoading: false } : m);
+    const updatedMsgs = msgs.map(m => m.id === tempId ? { ...m, id: serverId, isLoading: false, mentions } : m);
 
     // Nếu lastReadMessageId đang trỏ vào tempId, cũng cập nhật nó luôn
     const updatedConvs = state.conversations.map(c =>
@@ -1249,6 +1261,12 @@ export const useChatStore = create<ChatState>((set) => ({
       c.conversationId === conversationId && c.lastReactNotification
         ? { ...c, lastReactNotification: { ...c.lastReactNotification, isRead: true } }
         : c
+    ),
+  })),
+
+  toggleMuteConversation: (conversationId, isMuted) => set((state) => ({
+    conversations: state.conversations.map(c =>
+      c.conversationId === conversationId ? { ...c, isMuted } : c
     ),
   })),
 }));

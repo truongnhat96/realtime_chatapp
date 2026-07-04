@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useChatStore, resolveUserName } from '../../stores/chatStore';
 import { useAuthStore } from '../../stores/authStore';
 import { chatApi } from '../../lib/api';
-import { Loader2 } from 'lucide-react';
+import { Loader2, BellOff } from 'lucide-react';
 import GroupAvatar from './GroupAvatar';
 import { convertUtcToLocal, formatSystemMessage, getReactionEmoji } from '../../lib/utils';
 import { useMessageTime } from '../../hooks/useLastOnline';
@@ -349,9 +349,10 @@ function ConversationItem({
                   : (conv.messageType === 1 ? '[Hình ảnh]' : conv.messageType === 2 ? '[Video]' : conv.messageType === 3 ? '[File]' : conv.messageType === 5 ? '[Liên kết]' : conv.messageType === 6 ? '[Nhãn dán]' : displayMessage)
             }
           </p>
+          {conv.isMuted && <BellOff size={14} className="text-gray-400 dark:text-gray-500 flex-shrink-0" />}
           {isUnread ? (
             <div className="w-2.5 h-2.5 bg-[#8ED8ED] rounded-full flex-shrink-0"></div>
-          ) : isSeenByOpponent && avatarUser ? (
+          ) : isSeenByOpponent && avatarUser && !showReactNotification ? (
             <img src={avatarUser.urlAvatar || '/default-avatar.png'} alt="seen" className="w-4 h-4 rounded-full flex-shrink-0 grayscale-[0.5]" />
           ) : null}
         </div>

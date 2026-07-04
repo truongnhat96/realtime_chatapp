@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef } from 'react';
-import { X, UserPlus, LogOut, Link2, Copy, Check, Trash2, ChevronDown, Image, FileText, LinkIcon, ChevronRight, Loader2, ImageIcon } from 'lucide-react';
+import { X, UserPlus, LogOut, Link2, Copy, Check, Trash2, ChevronDown, Image, FileText, LinkIcon, ChevronRight, Loader2, ImageIcon, Bell, BellOff } from 'lucide-react';
 import { useChatStore } from '../../stores/chatStore';
 import { useAuthStore } from '../../stores/authStore';
 import { chatApi } from '../../lib/api';
@@ -30,7 +30,24 @@ export default function ChatDetailSidebar({ conversation, onClose, onLeaveConver
   const [overlayTab, setOverlayTab] = useState<OverlayTab | null>(null);
   const [expandCustomize, setExpandCustomize] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const [isTogglingMute, setIsTogglingMute] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleToggleMute = async () => {
+    if (isTogglingMute) return;
+    setIsTogglingMute(true);
+    const newMuteState = !conversation.isMuted;
+    try {
+      const res = await chatApi.toggleMuteConversation(conversation.conversationId, newMuteState);
+      if (res.isSuccess) {
+        useChatStore.getState().toggleMuteConversation(conversation.conversationId, newMuteState);
+      }
+    } catch (err) {
+      console.error('Failed to toggle mute status:', err);
+    } finally {
+      setIsTogglingMute(false);
+    }
+  };
 
   const handleToggleAllowJoinByLink = async (checked: boolean) => {
     if (isUpdatingSettings) return;
@@ -198,6 +215,40 @@ export default function ChatDetailSidebar({ conversation, onClose, onLeaveConver
             <span className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               {groupInfo.memberCount} thành viên
             </span>
+          )}
+          {!conversation.isRemovedFromGroup && (
+            <div className="mt-4 flex flex-col items-center">
+              <button
+                onClick={handleToggleMute}
+                disabled={isTogglingMute}
+                className="flex flex-col items-center group cursor-pointer border-none bg-transparent outline-none focus:outline-none"
+              >
+                <div
+                  className={`w-9 h-9 rounded-full flex items-center justify-center transition-all duration-200
+                    ${conversation.isMuted
+                      ? 'bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/30 dark:hover:bg-blue-950/50 text-blue-600 dark:text-blue-400'
+                      : 'bg-gray-100 hover:bg-gray-200 dark:bg-[#2C2C2C] dark:hover:bg-[#3C3C3C] text-gray-700 dark:text-gray-300'
+                    }
+                  `}
+                >
+                  {conversation.isMuted ? (
+                    <BellOff size={18} className="stroke-[2.25]" />
+                  ) : (
+                    <Bell size={18} className="stroke-[2.25]" />
+                  )}
+                </div>
+                <span
+                  className={`text-[12px] mt-1.5 font-medium tracking-tight text-center leading-tight transition-colors duration-200
+                    ${conversation.isMuted
+                      ? 'text-blue-600 dark:text-blue-400 font-semibold'
+                      : 'text-gray-700 dark:text-gray-300'
+                    }
+                  `}
+                >
+                  {conversation.isMuted ? 'Bật thông báo' : 'Tắt thông báo'}
+                </span>
+              </button>
+            </div>
           )}
           {conversation.isRemovedFromGroup && (
             <button

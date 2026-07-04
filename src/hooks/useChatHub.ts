@@ -2,11 +2,12 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { HubConnection, HubConnectionBuilder, LogLevel } from '@microsoft/signalr';
 import { APP_CONFIG } from '../lib/constants';
 import { useAuthStore } from '../stores/authStore';
-import { useChatStore } from '../stores/chatStore';
-import { useToastStore } from '../stores/toastStore';
+import { useChatStore, resolveUserName, resolveUserAvatar } from '../stores/chatStore';
+import { showBrowserNotification } from '../lib/notification';
 import { useCallStore, CallStatus } from '../stores/callStore';
 import { convertUtcToLocal, getFirstUrl, getReactionEmoji } from '../lib/utils';
 import axiosInstance from '../lib/axiosInstance';
+import { chatApi } from '../lib/api';
 import type {
   GroupCreatedEvent,
   AddedToGroupEvent,
@@ -118,6 +119,11 @@ const useChatHub = () => {
       const msgSenderAvatar = (msg.senderAvatar || msg.SenderAvatar) as string | undefined;
       const msgMessageType = (msg.messageType ?? msg.MessageType ?? 0) as number;
       const msgConversationType = (msg.conversationType ?? msg.ConversationType) as number | undefined;
+      const rawMentions = (msg.mentions || msg.Mentions) as any[] | undefined;
+      const msgMentions = rawMentions?.map(m => ({
+        userId: m.userId || m.UserId,
+        type: m.type !== undefined ? m.type : m.Type
+      })) as import('../types/chat').MentionItem[] | undefined;
       const currentUserId = useAuthStore.getState().user?.id;
       const activeConversationId = useChatStore.getState().activeConversationId;
 
@@ -143,9 +149,19 @@ const useChatHub = () => {
         if (pendingIndex !== -1) {
           const pendingMsg = pendingSelfMessagesRef.current[pendingIndex];
           pendingSelfMessagesRef.current.splice(pendingIndex, 1);
-          // Cập nhật ID thật từ server cho tin nhắn đang hiển thị
+          // Cập nhật ID thật từ server cho tin nhắn đang hiển thị và gắn mentions
           if (serverMessageId && pendingMsg.tempId) {
-            useChatStore.getState().updateMessageId(conversationId, pendingMsg.tempId, serverMessageId);
+            useChatStore.getState().updateMessageId(conversationId, pendingMsg.tempId, serverMessageId, msgMentions);
+            // Cập nhật cả tin nhắn cuối cùng của conversation
+            useChatStore.getState().updateConversationLastMessage(
+              conversationId,
+              msgMessageType === 6 ? '[Nhãn dán]' : (msgContent ?? ''),
+              msgSendTime || '',
+              msgFromUserId,
+              msgMessageType,
+              useAuthStore.getState().user?.name || "",
+              msgMentions
+            );
           }
           return;
         }
@@ -156,7 +172,7 @@ const useChatHub = () => {
       const msgCallId = (msg.callId || msg.CallId) as string | undefined;
       const msgCall = (msg.call || msg.Call) as any | undefined;
       const msgSystemMessages = (msg.systemMessages || msg.SystemMessages) as any[] | undefined;
-      
+
       useChatStore.getState().addMessage(conversationId, {
         id: serverMessageId,
         content: msgContent ?? '',
@@ -169,6 +185,7 @@ const useChatHub = () => {
         callId: msgCallId,
         call: msgCall,
         systemMessages: msgSystemMessages,
+        mentions: msgMentions,
       });
 
       if (msgFromUserId) {
@@ -208,7 +225,8 @@ const useChatHub = () => {
                 opponentLastReadMessageId: '',
                 unreadCount: activeConversationId === conversationId ? 0 : 1,
               },
-              lastMessageSenderId: msgFromUserId
+              lastMessageSenderId: msgFromUserId,
+              mentions: msgMentions,
             });
           }
         } catch (error) {
@@ -226,20 +244,42 @@ const useChatHub = () => {
             senderName = senderName || "Thành viên nhóm";
           }
         }
-        useChatStore.getState().updateConversationLastMessage(conversationId, msgMessageType === 6 ? '[Nhãn dán]' : (msgContent ?? ''), msgSendTime || '', msgFromUserId, msgMessageType, senderName);
+        useChatStore.getState().updateConversationLastMessage(conversationId, msgMessageType === 6 ? '[Nhãn dán]' : (msgContent ?? ''), msgSendTime || '', msgFromUserId, msgMessageType, senderName, msgMentions);
       }
 
       if (msgFromUserId && msgFromUserId.toLowerCase() !== currentUserId?.toLowerCase()) {
         const shouldNotify = !activeConversationId || activeConversationId !== conversationId;
         if (shouldNotify) {
-          useToastStore.getState().addChatToast({
-            conversationId,
-            userName: senderName,
-            userAvatar: senderAvatar,
-            message: msgContent ?? '',
-            time: msgSendTime || '',
-            isOnline: senderIsOnline
-          });
+          const conv = useChatStore.getState().conversations.find(c => c.conversationId === conversationId);
+          const isMuted = conv?.isMuted ?? false;
+
+          const personalMention = msgMentions?.find(m =>
+            m.type === 0 && m.userId && m.userId.toLowerCase() === currentUserId?.toLowerCase()
+          );
+          const everyoneMention = msgMentions?.find(m => m.type === 1);
+          const isMentioned = !!personalMention || !!everyoneMention;
+
+          if (!isMuted || isMentioned) {
+            const isGroup = msgConversationType === 1 || (conv && conv.type === 1);
+            const messageBody = msgMessageType === 6 ? '[Nhãn dán]' : (msgContent ?? '');
+
+            let bodyText = '';
+            if (isGroup && isMentioned) {
+              const currentUserDisplayName = useAuthStore.getState().user?.name || "bạn";
+              const tagText = personalMention ? `@${currentUserDisplayName}` : `@mọi người`;
+              bodyText = `📣 • ${senderName} đã nhắc đến bạn trong nhóm của bạn: ${tagText}`;
+            } else if (isGroup) {
+              bodyText = `${senderName} gửi tới nhóm của bạn: ${messageBody}`;
+            } else {
+              bodyText = `${senderName}: ${messageBody}`;
+            }
+
+            showBrowserNotification("Chat App", {
+              body: bodyText,
+              icon: senderAvatar,
+              conversationId
+            });
+          }
         }
       }
     };
@@ -502,17 +542,20 @@ const useChatHub = () => {
       const activeConversationId = useChatStore.getState().activeConversationId;
       if (activeConversationId !== conversationId) {
         const conv = useChatStore.getState().conversations.find(c => c.conversationId === conversationId);
-        const senderName = msg.senderName || conv?.user?.name || 'Người dùng';
-        const senderAvatar = msg.senderAvatar || conv?.user?.urlAvatar || '';
-        const senderIsOnline = msg.fromUserId ? (useChatStore.getState().onlineUsers[msg.fromUserId.toLowerCase()] ?? false) : false;
-        useToastStore.getState().addChatToast({
-          conversationId,
-          userName: senderName,
-          userAvatar: senderAvatar,
-          message: previewText,
-          time: localSendTime,
-          isOnline: senderIsOnline,
-        });
+        const isMuted = conv?.isMuted ?? false;
+        if (!isMuted) {
+          const senderName = msg.senderName || conv?.user?.name || 'Người dùng';
+          const senderAvatar = msg.senderAvatar || conv?.user?.urlAvatar || '';
+          const isGroup = conv ? conv.type === 1 : (msg.conversationType === 1);
+          const bodyText = isGroup
+            ? `${senderName} gửi tới nhóm của bạn: ${previewText}`
+            : `${senderName}: ${previewText}`;
+          showBrowserNotification("Chat App", {
+            body: bodyText,
+            icon: senderAvatar,
+            conversationId
+          });
+        }
       }
     };
 
@@ -595,18 +638,19 @@ const useChatHub = () => {
         });
 
         if (!isRead) {
-          // Resolve tên người thả react
-          const { resolveUserName } = await import('../stores/chatStore');
-          const reactorName = resolveUserName(reactorUserId, conversationId, true);
-          const emoji = getReactionEmoji(reactionType);
-          useToastStore.getState().addChatToast({
-            conversationId,
-            userName: reactorName,
-            userAvatar: '',
-            message: `đã bày tỏ cảm xúc ${emoji} về tin nhắn`,
-            time: new Date().toISOString(),
-            isOnline: true,
-          });
+          const conv = useChatStore.getState().conversations.find(c => c.conversationId === conversationId);
+          const isMuted = conv?.isMuted ?? false;
+          if (!isMuted) {
+            const reactorName = resolveUserName(reactorUserId, conversationId, true);
+            const reactorAvatar = resolveUserAvatar(reactorUserId, conversationId);
+            const emoji = getReactionEmoji(reactionType);
+            const bodyText = `${reactorName} đã bày tỏ cảm xúc ${emoji} về tin nhắn`;
+            showBrowserNotification("Chat App", {
+              body: bodyText,
+              icon: reactorAvatar,
+              conversationId
+            });
+          }
         }
       }
     };
@@ -677,14 +721,14 @@ const useChatHub = () => {
       callType: number;
     }) => {
       const callStore = useCallStore.getState();
-      
+
       switch (data.signalType) {
         case "ringing":
           if (callStore.callState === 'idle') {
             const conv = useChatStore.getState().conversations.find(c => c.conversationId === data.conversationId);
             let opponentName = 'Người dùng';
             let opponentAvatar = '';
-            
+
             if (conv) {
               if (conv.type === 0) { // Direct
                 opponentName = conv.user?.name || 'Người dùng';
@@ -695,7 +739,17 @@ const useChatHub = () => {
                 opponentAvatar = member?.urlAvatar || conv.groupInfo?.groupImage || '';
               }
             }
-            
+
+            const isMuted = conv?.isMuted ?? false;
+            if (!isMuted) {
+              const callTypeStr = data.callType === 1 ? 'video' : 'thoại';
+              showBrowserNotification("Cuộc gọi đến", {
+                body: `Có cuộc gọi ${callTypeStr} đến từ ${opponentName}`,
+                icon: opponentAvatar,
+                conversationId: data.conversationId
+              });
+            }
+
             callStore.receiveCall({
               id: data.callId,
               conversationId: data.conversationId,
@@ -710,7 +764,7 @@ const useChatHub = () => {
             }
           }
           break;
-          
+
         case "accept":
           if (callStore.callState === 'ringing_outgoing') {
             const sendWebRTCSignalLambda = async (targetId: string, signalData: string) => {
@@ -723,7 +777,7 @@ const useChatHub = () => {
             await callStore.acceptCallLocal(sendWebRTCSignalLambda, data.fromUserId);
           }
           break;
-          
+
         case "reject":
         case "busy":
           {
@@ -733,9 +787,10 @@ const useChatHub = () => {
             if (isGroupCall) {
               const member = conv?.participants.find(p => p.id === data.fromUserId);
               const memberName = member?.name || 'Thành viên nhóm';
-              useToastStore.getState().addToast({
-                message: `${memberName} ${data.signalType === 'busy' ? 'đang bận' : 'đã từ chối cuộc gọi'}`,
-                type: 'error'
+              showBrowserNotification("Chat App", {
+                body: `${memberName} ${data.signalType === 'busy' ? 'đang bận' : 'đã từ chối cuộc gọi'}`,
+                icon: member?.urlAvatar,
+                conversationId: data.conversationId
               });
             } else {
               try {
@@ -747,11 +802,16 @@ const useChatHub = () => {
                 console.error("Lỗi khi call/leave khi nhận reject/busy:", err);
               }
               callStore.endCallLocal();
-              useToastStore.getState().addToast({ message: 'Cuộc gọi bị từ chối hoặc người dùng đang bận', type: 'error' });
+              const opponentAvatar = conv?.user?.urlAvatar || '';
+              showBrowserNotification("Chat App", {
+                body: 'Cuộc gọi bị từ chối hoặc người dùng đang bận',
+                icon: opponentAvatar,
+                conversationId: data.conversationId
+              });
             }
           }
           break;
-          
+
         case "cancel":
           {
             const conv = useChatStore.getState().conversations.find(c => c.conversationId === data.conversationId);
@@ -778,7 +838,7 @@ const useChatHub = () => {
             callStore.updateParticipantCamera(data.fromUserId, true);
           }
           break;
-          
+
         case "camera_off":
           if (callStore.activeCall && callStore.activeCall.id === data.callId) {
             callStore.updateParticipantCamera(data.fromUserId, false);
@@ -786,11 +846,11 @@ const useChatHub = () => {
           break;
       }
     };
- 
+
     const onReceiveWebRTCSignal = async (data: { fromUserId: string; signalData: string }) => {
       const callStore = useCallStore.getState();
       const signal = JSON.parse(data.signalData);
-      
+
       const sendWebRTCSignalLambda = async (targetId: string, signalData: string) => {
         try {
           await connection.invoke("SendWebRTCSignal", targetId, signalData);
@@ -809,7 +869,7 @@ const useChatHub = () => {
         await callStore.handleIceCandidate(signal.candidate, data.fromUserId);
       }
     };
- 
+
     connection.on("ReceiveCallSignal", onReceiveCallSignal);
     connection.on("ReceiveWebRTCSignal", onReceiveWebRTCSignal);
     connection.on("UserJoinedCall", (data: { callId: string; userId: string; userName: string }) => {
@@ -912,74 +972,101 @@ const useChatHub = () => {
     };
   }, [hasHydrated, accessToken, expiresAt]);
 
-  const sendMessage = useCallback(async (conversationId: string, content: string, toUserId: string, messageType?: number, replyToMessageId?: string) => {
-    if (connectionRef.current && isConnected) {
-      const detectedUrl = getFirstUrl(content);
-      const msgType = messageType !== undefined ? messageType : (detectedUrl ? 5 : 0);
+  const sendMessage = useCallback(async (
+    conversationId: string,
+    content: string,
+    toUserId: string,
+    messageType?: number,
+    replyToMessageId?: string,
+    mentionedUserIds?: string[],
+    mentionEveryone?: boolean
+  ) => {
+    const detectedUrl = getFirstUrl(content);
+    const msgType = messageType !== undefined ? messageType : (detectedUrl ? 5 : 0);
+    const sendTime = new Date().toISOString();
 
-      const payload: Record<string, unknown> = {
+    // Thêm tin nhắn tạm vào store TRƯỚC khi gọi API để hiển thị ngay lập tức
+    const currentUserId = useAuthStore.getState().user?.id;
+    const tempId = crypto.randomUUID();
+
+    if (currentUserId) {
+      pendingSelfMessagesRef.current.push({
+        conversationId,
+        content,
+        tempId,
+        createdAtMs: Date.now(),
+      });
+      // Dọn dẹp tin nhắn chờ quá hạn (15s)
+      pendingSelfMessagesRef.current = pendingSelfMessagesRef.current.filter((item) => {
+        return Date.now() - item.createdAtMs < 15000;
+      });
+
+      useChatStore.getState().addMessage(conversationId, {
+        id: tempId,
+        content,
+        sendTime,
+        fromUserId: currentUserId,
+        messageType: msgType,
+        isLoading: true,
+        replyToMessageId: replyToMessageId || undefined,
+      });
+      const previewText = msgType === 6 ? '[Đã gửi nhãn dán]' : content;
+      useChatStore.getState().updateConversationLastMessage(conversationId, previewText, sendTime, currentUserId, msgType, useAuthStore.getState().user?.name);
+    }
+
+    console.log("toUserId: ", toUserId)
+
+    try {
+      const response = await chatApi.sendMessage({
         conversationId,
         content,
         messageType: msgType,
-        sendTime: new Date().toISOString(),
-        toUserId,
-        // Thêm PascalCase để đối phó với model binding backend nếu nó bị strict
-        ConversationId: conversationId,
-        Content: content,
-        MessageType: msgType,
-        SendTime: new Date().toISOString(),
-        ToUserId: toUserId,
-      };
+        sendTime,
+        fromUserId: currentUserId || '',
+        replyToMessageId: replyToMessageId || undefined,
+        mentionedUserIds: mentionedUserIds || [],
+        mentionEveryone: mentionEveryone || false,
+      });
 
-      if (replyToMessageId) {
-        payload.replyToMessageId = replyToMessageId;
-        payload.ReplyToMessageId = replyToMessageId;
-      }
+      if (response.isSuccess && response.data) {
+        const serverMessageId = response.data.id;
+        const rawMentions = response.data.mentions;
+        const msgMentions = rawMentions?.map((m) => ({
+          userId: m.userId,
+          type: m.type,
+        })) as import('../types/chat').MentionItem[] | undefined;
+        const localSendTime = convertUtcToLocal(response.data.sendTime);
 
-      // Thêm tin nhắn tạm vào store TRƯỚC khi invoke để tránh race condition
-      // (server broadcast ReceiveMessage về trước khi invoke resolve)
-      const currentUserId = useAuthStore.getState().user?.id;
-      const tempId = crypto.randomUUID();
+        // Xóa khỏi pending list
+        pendingSelfMessagesRef.current = pendingSelfMessagesRef.current.filter(item => item.tempId !== tempId);
 
-      if (currentUserId) {
-        pendingSelfMessagesRef.current.push({
-          conversationId,
-          content,
-          tempId,
-          createdAtMs: Date.now(),
-        });
-        // Dọn dẹp tin nhắn chờ quá hạn (15s)
-        pendingSelfMessagesRef.current = pendingSelfMessagesRef.current.filter((item) => {
-          return Date.now() - item.createdAtMs < 15000;
-        });
-
-        useChatStore.getState().addMessage(conversationId, {
-          id: tempId,
-          content,
-          sendTime: payload.sendTime as string,
-          fromUserId: currentUserId,
-          messageType: msgType,
-          isLoading: true,
-          replyToMessageId: replyToMessageId || undefined,
-        });
-        const previewText = msgType === 6 ? '[Đã gửi nhãn dán]' : content;
-        useChatStore.getState().updateConversationLastMessage(conversationId, previewText, payload.sendTime as string, currentUserId, msgType, useAuthStore.getState().user?.name);
-      }
-
-      try {
-        await connectionRef.current.invoke("SendMessageToConversation", payload);
-      } catch (error) {
-        console.error("Error sending message: ", error);
+        // Cập nhật ID thật từ server cho tin nhắn tạm
         if (currentUserId) {
-          // Xóa khỏi danh sách pending
-          pendingSelfMessagesRef.current = pendingSelfMessagesRef.current.filter(item => item.tempId !== tempId);
-          // Đánh dấu lỗi gửi tin nhắn
-          useChatStore.getState().updateMessageError(conversationId, tempId, 'Gửi lỗi');
+          useChatStore.getState().updateMessageId(conversationId, tempId, serverMessageId, msgMentions);
+          useChatStore.getState().updateConversationLastMessage(
+            conversationId,
+            msgType === 6 ? '[Nhãn dán]' : content,
+            localSendTime,
+            currentUserId,
+            msgType,
+            useAuthStore.getState().user?.name || '',
+            msgMentions
+          );
         }
-        throw error;
+      } else {
+        throw new Error(response.messages?.[0] || 'Gửi lỗi');
       }
+    } catch (error) {
+      console.error("Error sending message: ", error);
+      if (currentUserId) {
+        // Xóa khỏi danh sách pending
+        pendingSelfMessagesRef.current = pendingSelfMessagesRef.current.filter(item => item.tempId !== tempId);
+        // Đánh dấu lỗi gửi tin nhắn
+        useChatStore.getState().updateMessageError(conversationId, tempId, 'Gửi lỗi');
+      }
+      throw error;
     }
-  }, [isConnected]);
+  }, []);
 
   const sendTyping = useCallback(async (conversationId: string, toUserId: string) => {
     if (!connectionRef.current || !isConnected || !conversationId || !toUserId) {
@@ -1020,24 +1107,15 @@ const useChatHub = () => {
   }, [isConnected]);
 
   const markAsRead = useCallback(async (conversationId: string, messageId: string) => {
-    if (!connectionRef.current || !isConnected) return;
-
-    const payload = {
-      conversationId,
-      messageId,
-      ConversationId: conversationId,
-      MessageId: messageId
-    };
-
     try {
-      await connectionRef.current.invoke("MarkMessageAsRead", payload);
+      await chatApi.markMessageAsRead({ conversationId, messageId });
 
-      // Luôn clear cờ unread local sau khi invoke thành công
+      // Luôn clear cờ unread local sau khi gọi API thành công
       useChatStore.getState().setConversationUnread(conversationId, false);
     } catch (error) {
       console.error("Error marking message as read: ", error);
     }
-  }, [isConnected]);
+  }, []);
 
   const joinConversation = useCallback(async (conversationId: string) => {
     if (!connectionRef.current || !isConnected) return;

@@ -179,6 +179,16 @@ export const chatApi = {
     });
   },
 
+  // Bật/Tắt thông báo cuộc trò chuyện
+  toggleMuteConversation: (conversationId: string, isMuted: boolean): Promise<{ isSuccess: boolean; messages: string[] }> => {
+    return axiosInstance.post('/conversation/toggle-mute', {
+      conversationId,
+      isMuted,
+      ConversationId: conversationId,
+      IsMuted: isMuted
+    });
+  },
+
   // Upload 1 file media lên server (POST /upload-media)
   uploadMedia: async (
     conversationId: string,
@@ -355,6 +365,39 @@ export const chatApi = {
     );
 
     return response.data;
+  },
+
+  // Gửi tin nhắn text (POST /send) — thay thế Hub invoke
+  sendMessage: (payload: {
+    conversationId: string;
+    content: string;
+    messageType: number;
+    sendTime: string;
+    fromUserId: string;
+    replyToMessageId?: string;
+    mentionedUserIds?: string[];
+    mentionEveryone?: boolean;
+  }): Promise<{
+    data: {
+      id: string;
+      senderName: string;
+      senderAvatar: string;
+      sendTime: string;
+      conversationType: number;
+      mentions?: import('../types/chat').MentionItem[];
+    };
+    messages: string[];
+    isSuccess: boolean;
+  }> => {
+    return axiosInstance.post('/conversation/messages/send', payload);
+  },
+
+  // Đánh dấu tin nhắn đã đọc (POST /mark-read) — thay thế Hub invoke
+  markMessageAsRead: (payload: {
+    conversationId: string;
+    messageId: string;
+  }): Promise<{ messages: string[]; isSuccess: boolean }> => {
+    return axiosInstance.post('/conversation/messages/mark-read', payload);
   },
 
   // Xóa hoặc thu hồi tin nhắn

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Send, Smile, Paperclip, ImagePlus, X, FileText, Plus, Link2, Sticker, Reply } from 'lucide-react';
 import Picker from '@emoji-mart/react';
 import data from '@emoji-mart/data';
@@ -6,7 +6,8 @@ import StickerPicker from './StickerPicker';
 import { chatApi } from '../../lib/api';
 import { getFirstUrl, normalizeUrl } from '../../lib/utils';
 import { useThemeStore } from '../../stores/themeStore';
-import type { LinkPreviewData } from '../../types/chat';
+import { useAuthStore } from '../../stores/authStore';
+import type { LinkPreviewData, ConversationItem } from '../../types/chat';
 import type { ReplyingMessage } from '../../stores/chatStore';
 
 /** Vietnamese i18n for Emoji Mart */
@@ -41,7 +42,8 @@ const emojiI18n = {
 };
 
 interface Props {
-  onSendMessage: (text: string) => void | Promise<void>;
+  conversation?: ConversationItem;
+  onSendMessage: (text: string, mentionedUserIds?: string[], mentionEveryone?: boolean) => void | Promise<void>;
   onSendMediaFiles: (files: File[], content: string | null) => void | Promise<void>;
   onSendSticker?: (url: string) => void | Promise<void>;
   onTypingInputChange?: (value: string) => void;
@@ -71,13 +73,22 @@ type FileAttachment = {
   id: string;
 };
 
-export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendSticker, onTypingInputChange, onStopTyping, disabled, replyingMessage, onCancelReply }: Props) {
+export default function ChatInput({ conversation, onSendMessage, onSendMediaFiles, onSendSticker, onTypingInputChange, onStopTyping, disabled, replyingMessage, onCancelReply }: Props) {
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<FileAttachment[]>([]);
   const [showStickerPicker, setShowStickerPicker] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const isDark = useThemeStore((s) => s.isDark);
+
+  // === Mention Feature State ===
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestionQuery, setSuggestionQuery] = useState('');
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
+  const [mentions, setMentions] = useState<{ id: string; name: string; isEveryone?: boolean }[]>([]);
+  const [randomParticipants, setRandomParticipants] = useState<Array<{ id: string; name: string; avatar?: string }>>([]);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
+  const overlayRef = useRef<HTMLDivElement>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaInputRef = useRef<HTMLInputElement>(null);
@@ -175,34 +186,127 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendStick
     });
   }, []);
 
-  const clearAllFiles = useCallback(() => {
-    setSelectedFiles(prev => {
-      prev.forEach(item => {
-        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+
+
+  // Load 5 random participants when suggestion list is opened
+  useEffect(() => {
+    if (showSuggestions && conversation && conversation.type === 1) {
+      const currentUserId = useAuthStore.getState().user?.id;
+      const all = (conversation.participants || [])
+        .filter(p => p.id?.toLowerCase() !== currentUserId?.toLowerCase())
+        .map(p => ({ id: p.id, name: p.name, avatar: p.urlAvatar }));
+
+      // Shuffle and pick 5
+      const shuffled = [...all].sort(() => 0.5 - Math.random()).slice(0, 5);
+      setRandomParticipants(shuffled);
+    } else if (!showSuggestions) {
+      setRandomParticipants([]);
+    }
+  }, [showSuggestions, conversation]);
+
+  // === Mention Candidates & Filter ===
+  const filteredCandidates = useMemo(() => {
+    if (!showSuggestions || !conversation || conversation.type !== 1) return [];
+
+    const list: Array<{ id: string; name: string; avatar?: string; isEveryone?: boolean }> = [];
+
+    // Add "everyone" / "mọi người" if matches search query
+    if (!suggestionQuery || 'mọi người'.includes(suggestionQuery.toLowerCase())) {
+      list.push({ id: 'everyone', name: 'mọi người', isEveryone: true });
+    }
+
+    if (suggestionQuery) {
+      // Filter the entire group by query and limit to 5
+      const currentUserId = useAuthStore.getState().user?.id;
+      const query = suggestionQuery.toLowerCase();
+      const filtered = (conversation.participants || [])
+        .filter(p => p.id?.toLowerCase() !== currentUserId?.toLowerCase() && p.name.toLowerCase().includes(query))
+        .map(p => ({ id: p.id, name: p.name, avatar: p.urlAvatar }))
+        .slice(0, 5);
+      list.push(...filtered);
+    } else {
+      // Use the pre-selected random 5 participants
+      list.push(...randomParticipants);
+    }
+
+    return list;
+  }, [showSuggestions, suggestionQuery, conversation, randomParticipants]);
+
+  const selectSuggestion = useCallback((candidate: { id: string; name: string; isEveryone?: boolean }) => {
+    if (!inputRef.current) return;
+    const currentText = message;
+    const selectionStart = inputRef.current.selectionStart || 0;
+    const textBeforeCursor = currentText.slice(0, selectionStart);
+    const textAfterCursor = currentText.slice(selectionStart);
+
+    const lastAtIdx = textBeforeCursor.lastIndexOf('@');
+    if (lastAtIdx !== -1) {
+      const hasSpaceBefore = lastAtIdx === 0 || textBeforeCursor[lastAtIdx - 1] === ' ' || textBeforeCursor[lastAtIdx - 1] === '\u00A0';
+      const prefix = hasSpaceBefore ? '' : ' ';
+      const newTextBeforeCursor = textBeforeCursor.slice(0, lastAtIdx) + prefix + `@${candidate.name} `;
+      const newText = newTextBeforeCursor + textAfterCursor;
+      setMessage(newText);
+      onTypingInputChange?.(newText);
+
+      // Update cursor position
+      setTimeout(() => {
+        if (inputRef.current) {
+          const newPos = newTextBeforeCursor.length;
+          inputRef.current.setSelectionRange(newPos, newPos);
+          inputRef.current.focus();
+        }
+      }, 0);
+
+      // Save mention item
+      setMentions(prev => {
+        if (prev.some(m => m.id === candidate.id)) return prev;
+        return [...prev, { id: candidate.id, name: candidate.name, isEveryone: candidate.isEveryone }];
       });
-      return [];
-    });
+    }
+    setShowSuggestions(false);
+  }, [message, mentions, onTypingInputChange]);
+
+  // Click outside to close suggestions
+  useEffect(() => {
+    if (!showSuggestions) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (
+        suggestionsRef.current && !suggestionsRef.current.contains(e.target as Node) &&
+        inputRef.current && !inputRef.current.contains(e.target as Node)
+      ) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showSuggestions]);
+
+  const handleSend = async () => {
+    const trimmedMessage = message.trim();
+    const filesToSend = selectedFiles.map((f) => f.file);
+
+    // Dọn dẹp state trước khi gửi
+    setMessage('');
+    setSelectedFiles([]);
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (mediaInputRef.current) mediaInputRef.current.value = '';
-  }, []);
 
-  const handleSend = async (e?: React.FormEvent) => {
-    e?.preventDefault();
-    const trimmedMessage = message.trim();
-
-    if (selectedFiles.length > 0) {
-      if (disabled || isSending) return;
-      const filesToSend = selectedFiles.map(s => s.file);
-      // Xóa preview + text ngay lập tức
-      setMessage('');
-      onTypingInputChange?.('');
-      clearAllFiles();
+    if (filesToSend.length > 0) {
       clearLinkPreview();
       setIsSending(true);
       try {
         // Gửi text riêng nếu có
         if (trimmedMessage) {
-          await Promise.resolve(onSendMessage(trimmedMessage));
+          // Extract active mentions
+          const activeMentions = mentions.filter(m => {
+            const lowerMessage = trimmedMessage.toLowerCase();
+            return m.isEveryone
+              ? lowerMessage.includes('@mọi người')
+              : lowerMessage.includes(`@${m.name.toLowerCase()}`);
+          });
+          const mentionedUserIds = activeMentions.filter(m => !m.isEveryone).map(m => m.id);
+          const mentionEveryone = activeMentions.some(m => m.isEveryone);
+          await Promise.resolve(onSendMessage(trimmedMessage, mentionedUserIds, mentionEveryone));
         }
         // Gửi files
         await Promise.resolve(onSendMediaFiles(filesToSend, null));
@@ -210,6 +314,7 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendStick
         console.error('Failed to send media: ', error);
       } finally {
         setIsSending(false);
+        setMentions([]);
       }
       return;
     }
@@ -218,19 +323,42 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendStick
     if (!trimmedMessage || disabled || isSending) return;
     setIsSending(true);
     try {
-      await Promise.resolve(onSendMessage(trimmedMessage));
-      setMessage('');
+      // Extract active mentions
+      const activeMentions = mentions.filter(m => {
+        const lowerMessage = trimmedMessage.toLowerCase();
+        return m.isEveryone
+          ? lowerMessage.includes('@mọi người')
+          : lowerMessage.includes(`@${m.name.toLowerCase()}`);
+      });
+      const mentionedUserIds = activeMentions.filter(m => !m.isEveryone).map(m => m.id);
+      const mentionEveryone = activeMentions.some(m => m.isEveryone);
+      await Promise.resolve(onSendMessage(trimmedMessage, mentionedUserIds, mentionEveryone));
       onTypingInputChange?.('');
       clearLinkPreview();
     } catch (error) {
       console.error('Failed to send message: ', error);
     } finally {
       setIsSending(false);
+      setMentions([]);
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
+    if (showSuggestions && filteredCandidates.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSelectedSuggestionIndex(prev => (prev + 1) % filteredCandidates.length);
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSelectedSuggestionIndex(prev => (prev - 1 + filteredCandidates.length) % filteredCandidates.length);
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        selectSuggestion(filteredCandidates[selectedSuggestionIndex]);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setShowSuggestions(false);
+      }
+    } else if (e.key === 'Enter') {
       void handleSend();
     }
   };
@@ -283,6 +411,43 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendStick
       if (!prev) setShowStickerPicker(false); // đóng sticker khi mở emoji
       return !prev;
     });
+  }, []);
+
+  // Render highlighted input overlay
+  const getHighlightedInput = () => {
+    if (!message) return null;
+    if (mentions.length === 0) {
+      return <span className="text-gray-900 dark:text-gray-100">{message}</span>;
+    }
+
+    // Sort names descending to match longer names first
+    const names = mentions.map(m => m.isEveryone ? 'mọi người' : m.name).filter(Boolean);
+    names.sort((a, b) => b.length - a.length);
+
+    if (names.length === 0) {
+      return <span className="text-gray-900 dark:text-gray-100">{message}</span>;
+    }
+
+    const escaped = names.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    const regex = new RegExp(`@(${escaped})`, 'g');
+
+    const parts = message.split(regex);
+    return parts.map((part, index) => {
+      if (names.includes(part)) {
+        return (
+          <span key={index} className="text-blue-600 dark:text-blue-400">
+            @{part}
+          </span>
+        );
+      }
+      return <span key={index} className="text-gray-900 dark:text-gray-100">{part}</span>;
+    });
+  };
+
+  const syncScroll = useCallback(() => {
+    if (inputRef.current && overlayRef.current) {
+      overlayRef.current.scrollLeft = inputRef.current.scrollLeft;
+    }
   }, []);
 
   return (
@@ -433,6 +598,50 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendStick
 
       {/* Input row */}
       <div className="p-4 relative">
+        {/* Mentions Suggestions Dropdown */}
+        {showSuggestions && filteredCandidates.length > 0 && (
+          <div
+            ref={suggestionsRef}
+            className="absolute bottom-full left-4 z-50 mb-2 w-72 rounded-2xl bg-white dark:bg-[#2C2C2C] border border-gray-200 dark:border-gray-800 shadow-2xl py-1.5 animate-fade-in"
+          >
+            {filteredCandidates.map((candidate, idx) => {
+              const isSelected = idx === selectedSuggestionIndex;
+              return (
+                <button
+                  key={candidate.id}
+                  type="button"
+                  onClick={() => selectSuggestion(candidate)}
+                  onMouseEnter={() => setSelectedSuggestionIndex(idx)}
+                  className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${isSelected
+                      ? 'bg-[#8ED8ED]/10 text-gray-900 dark:text-white'
+                      : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-[#1E1E1E]'
+                    }`}
+                >
+                  {candidate.isEveryone ? (
+                    <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-500 flex items-center justify-center flex-shrink-0">
+                      <span className="text-xs font-bold">@</span>
+                    </div>
+                  ) : (
+                    <img
+                      src={candidate.avatar || '/default-avatar.png'}
+                      alt=""
+                      className="w-8 h-8 rounded-full object-cover flex-shrink-0 bg-gray-100"
+                    />
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-semibold truncate leading-tight">
+                      {candidate.name}
+                    </p>
+                    <p className="text-[11px] text-gray-400 dark:text-gray-500 truncate leading-normal mt-1">
+                      {candidate.isEveryone ? 'Nhắc đến mọi người trong nhóm' : 'Thành viên'}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Emoji Picker popup */}
         {showEmojiPicker && (
           <div
@@ -521,20 +730,60 @@ export default function ChatInput({ onSendMessage, onSendMediaFiles, onSendStick
             }}
           />
 
-          <input
-            ref={inputRef}
-            type="text"
-            value={message}
-            onChange={(e) => {
-              const nextValue = e.target.value;
-              setMessage(nextValue);
-              onTypingInputChange?.(nextValue);
-            }}
-            onKeyDown={handleKeyDown}
-            onBlur={onStopTyping}
-            placeholder={disabled ? "Đang kết nối..." : "Nhập tin nhắn..."}
-            className="flex-1 bg-transparent border-none focus:outline-none focus:ring-0 text-[15px] text-gray-900 dark:text-gray-100 placeholder-gray-500"
-          />
+          <div className="flex-1 relative flex items-center min-w-0 self-stretch">
+            {/* Highlight Overlay */}
+            <div
+              ref={overlayRef}
+              className="absolute inset-0 flex items-center bg-transparent pointer-events-none overflow-hidden whitespace-nowrap text-[15px] px-0 select-none text-transparent"
+              style={{
+                lineHeight: 'normal',
+              }}
+            >
+              <div className="w-full text-left whitespace-nowrap overflow-hidden">
+                {getHighlightedInput()}
+              </div>
+            </div>
+            <input
+              ref={inputRef}
+              type="text"
+              value={message}
+              onChange={(e) => {
+                const nextValue = e.target.value;
+                setMessage(nextValue);
+                onTypingInputChange?.(nextValue);
+                setTimeout(syncScroll, 0);
+
+                // Check if we should show mentions suggestions (only in group chats)
+                if (conversation && conversation.type === 1) {
+                  const selectionStart = e.target.selectionStart || 0;
+                  const textBeforeCursor = nextValue.slice(0, selectionStart);
+                  const lastAtIdx = textBeforeCursor.lastIndexOf('@');
+                  if (lastAtIdx !== -1) {
+                    const textAfterAt = textBeforeCursor.slice(lastAtIdx + 1);
+                    if (!/\s/.test(textAfterAt)) {
+                      setShowSuggestions(true);
+                      setSuggestionQuery(textAfterAt);
+                      setSelectedSuggestionIndex(0);
+                      return;
+                    }
+                  }
+                }
+                setShowSuggestions(false);
+              }}
+              onKeyDown={(e) => {
+                handleKeyDown(e);
+                setTimeout(syncScroll, 0);
+              }}
+              onBlur={onStopTyping}
+              onScroll={syncScroll}
+              placeholder={disabled ? "Đang kết nối..." : "Nhập tin nhắn..."}
+              className={`w-full bg-transparent border-none focus:outline-none focus:ring-0 text-[15px] caret-gray-900 dark:caret-gray-100 placeholder-gray-500 px-0 ${message ? 'text-transparent' : 'text-gray-900 dark:text-gray-100'
+                }`}
+              style={{
+                lineHeight: 'normal',
+              }}
+            />
+          </div>
 
           <button
             onClick={() => {
